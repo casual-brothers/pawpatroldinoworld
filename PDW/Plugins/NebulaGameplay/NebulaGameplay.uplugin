@@ -1,0 +1,43 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "NebulaGameplay",
+	"Description": "Nebula Gameplay Plugin",
+	"Category": "Other",
+	"CreatedBy": "3DClouds",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "NebulaGameplay",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+
+	],
+
+	"Plugins": [
+		{
+			"Name": "FModStudio",
+			"Enabled": true
+		},
+		{
+			"Name": "OnlineSubsystem",
+			"Enabled": true
+		},
+		{
+			"Name": "OnlineSubsystemUtils",
+			"Enabled": true
+		}
+
+
+	]
+
+}

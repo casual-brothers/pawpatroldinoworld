@@ -1,0 +1,24 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "ToxicUtilities",
+	"Description": "One day we will have a Saving system smart enough to not work by default",
+	"Category": "Other",
+	"CreatedBy": "Davjen",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "ToxicUtilities",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}

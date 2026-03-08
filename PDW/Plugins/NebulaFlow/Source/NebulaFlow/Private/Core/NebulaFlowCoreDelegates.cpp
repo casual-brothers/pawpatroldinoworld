@@ -1,0 +1,32 @@
+#include "Core/NebulaFlowCoreDelegates.h"
+
+
+FNebulaFlowCoreDelegates::FTriggerActionDelegate FNebulaFlowCoreDelegates::OnActionTriggered;
+
+FNebulaFlowCoreDelegates::FAnyInputReleased FNebulaFlowCoreDelegates::OnAnyInputReleased;
+
+FNebulaFlowCoreDelegates::FAnyInputPressed FNebulaFlowCoreDelegates::OnAnyInputPressed;
+
+FNebulaFlowCoreDelegates::FOnLevelLoadStart FNebulaFlowCoreDelegates::OnLevelLoadStart;
+
+FNebulaFlowCoreDelegates::FOnLevelLoaded FNebulaFlowCoreDelegates::OnLevelLoaded;
+
+FNebulaFlowCoreDelegates::FOnGameSaved FNebulaFlowCoreDelegates::OnGameSaved;
+
+FNebulaFlowCoreDelegates::FOnSaveFailed FNebulaFlowCoreDelegates::OnSaveFailed;
+
+FNebulaFlowCoreDelegates::FOnBeforSave FNebulaFlowCoreDelegates::OnBeforSave;
+
+FNebulaFlowCoreDelegates::FOnPostLoad FNebulaFlowCoreDelegates::OnPostLoad;
+
+FNebulaFlowCoreDelegates::FOnNewPageShowed FNebulaFlowCoreDelegates::OnNewPageShowed;
+
+FNebulaFlowCoreDelegates::FOnUserLogOut FNebulaFlowCoreDelegates::OnUserLogOut;
+
+FNebulaFlowCoreDelegates::FOnControllerDisconnect FNebulaFlowCoreDelegates::OnControllerDisconnect;
+
+FNebulaFlowCoreDelegates::FOnGamePaused FNebulaFlowCoreDelegates::OnGamePaused;
+
+FNebulaFlowCoreDelegates::FOnSystemPaused FNebulaFlowCoreDelegates::OnSystemPaused;
+
+FNebulaFlowCoreDelegates::FOnActionRemapped FNebulaFlowCoreDelegates::OnActionRemapped;
