@@ -1,0 +1,164 @@
+{
+	"AchievementMap": {
+		"ACHIEVEMENT_00": {
+			"TrophyId": 1,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_01": {
+			"TrophyId": 2,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_02": {
+			"TrophyId": 3,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_03": {
+			"TrophyId": 4,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_04": {
+			"TrophyId": 5,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_05": {
+			"TrophyId": 6,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_06": {
+			"TrophyId": 7,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_07": {
+			"TrophyId": 8,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_08": {
+			"TrophyId": 9,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_09": {
+			"TrophyId": 10,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_10": {
+			"TrophyId": 11,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_11": {
+			"TrophyId": 12,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_12": {
+			"TrophyId": 13,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_13": {
+			"TrophyId": 14,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_14": {
+			"TrophyId": 15,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_15": {
+			"TrophyId": 16,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_16": {
+			"TrophyId": 17,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_17": {
+			"TrophyId": 18,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_18": {
+			"TrophyId": 19,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_19": {
+			"TrophyId": 20,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_20": {
+			"TrophyId": 21,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_21": {
+			"TrophyId": 22,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_22": {
+			"TrophyId": 23,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_23": {
+			"TrophyId": 24,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_24": {
+			"TrophyId": 25,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_25": {
+			"TrophyId": 26,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_26": {
+			"TrophyId": 27,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_27": {
+			"TrophyId": 28,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_28": {
+			"TrophyId": 29,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_29": {
+			"TrophyId": 30,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_30": {
+			"TrophyId": 31,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_31": {
+			"TrophyId": 32,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_32": {
+			"TrophyId": 33,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_33": {
+			"TrophyId": 34,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_34": {
+			"TrophyId": 35,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_35": {
+			"TrophyId": 36,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_36": {
+			"TrophyId": 37,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_37": {
+			"TrophyId": 38,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_38": {
+			"TrophyId": 39,
+			"Type": "AutomaticUnlock"
+		},
+		"ACHIEVEMENT_39": {
+			"TrophyId": 40,
+			"Type": "AutomaticUnlock"
+		}
+	}
+}

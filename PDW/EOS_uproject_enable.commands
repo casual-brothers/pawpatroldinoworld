@@ -1,0 +1,12 @@
+
+Context:			"Name": "OnlineSubsystemEOS",
+			"Enabled": false,
+			"Enabled": true,
+
+Context:			"Name": "EOSShared",
+			"Enabled": false,
+			"Enabled": true,
+
+Context:			"Name": "OnlineSubsystemSteam",
+			"Enabled": true,
+			"Enabled": false,

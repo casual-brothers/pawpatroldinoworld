@@ -1,0 +1,6 @@
+FileVersion:2
+Type:Static
+Guid:9F6957AD-485B-AEBC-75E3-399103F6E766
+ParentGuid:00000000-0000-0000-0000-000000000000
+
+/Game/Blueprints/Pawn/BP_BaseCharacter.BP_BaseCharacter

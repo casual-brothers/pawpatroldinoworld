@@ -1,0 +1,15 @@
+FileVersion:2
+Type:Static
+Guid:7CEE07B2-4C41-E156-1960-41BFEF2A4872
+ParentGuid:00000000-0000-0000-0000-000000000000
+
+/Game/Blueprints/Actors/Quest/BP_QuestReach.BP_QuestReach
+/Game/Blueprints/Areas/BP_BaseDialogueArea.BP_BaseDialogueArea
+/Game/Blueprints/Flowgraph/Quests/Root.Root
+/Game/Blueprints/UI/HUD/BPW_HUDMinigame.BPW_HUDMinigame
+/Game/Data/GameplayTags/Quest/DT_GameplayTag_Quest.DT_GameplayTag_Quest
+/Game/Data/Quest/DA_QuestConfig.DA_QuestConfig
+/Game/Data/StringText/ST_CommonText.ST_CommonText
+/Game/Data/StringText/ST_Dialogues.ST_Dialogues
+/Game/Data/StringText/ST_QuestSteps.ST_QuestSteps
+/Game/Maps/WorldMap.WorldMap
