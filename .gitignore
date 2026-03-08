@@ -48,10 +48,16 @@ Build/
 Build/*/**
 !Build/*/PakBlacklist*.txt
 !Build/**/*.ico
+Builds/
 Intermediate/
 Plugins/**/Intermediate/
 DerivedDataCache/
 Saved/
+
+# Project-local generated output
+PDW/Binaries/
+PDW/Build/
+PDW/Builds/
 
 # Cooked or generated content
 *_BuiltData.uasset
