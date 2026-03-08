@@ -1,0 +1,1 @@
+py d:\PRJ\PDW\Main\Batches\i18n-tool align-source.py
