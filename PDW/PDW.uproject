@@ -1,0 +1,278 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "{1154D48C-4E8F-130B-4743-0AA577C1959A}",
+	"Category": "",
+	"Description": "",
+	"Modules": [
+		{
+			"Name": "PDW",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"AdditionalDependencies": [
+				"Engine",
+				"NebulaFlow",
+				"UMG",
+				"GameplayAbilities",
+				"CoreUObject",
+				"Flow",
+				"DeveloperSettings",
+				"EnhancedInput",
+				"NebulaGraphics",
+				"WorldPartitionHelper"
+			]
+		},
+		{
+			"Name": "PDWEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default",
+			"AdditionalDependencies": [
+				"Engine",
+				"Blutility",
+				"EditorScriptingUtilities"
+			]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "ModelingToolsEditorMode",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		},
+		{
+			"Name": "ImGui",
+			"Enabled": true,
+			"PlatformAllowList": [
+				"Win64"
+			],
+			"PlatformDenyList": [
+				"PS4",
+				"PS5",
+				"XSX",
+				"WinGDK",
+				"XB1",
+				"Switch"
+			]
+		},
+		{
+			"Name": "OnlineSubsystemSteam",
+			"Enabled": true,
+			"PlatformAllowList": [
+				"Win64"
+			]
+		},
+		{
+			"Name": "EOSShared",
+			"Enabled": false,
+			"PlatformAllowList": [
+				"Win64",
+				"Windows"
+			]
+		},
+		{
+			"Name": "OnlineSubsystemEOS",
+			"Enabled": false,
+			"PlatformAllowList": [
+				"Win64",
+				"Windows"
+			]
+		},
+		{
+			"Name": "OnlineSubsystemGOG",
+			"Enabled": false,
+			"PlatformAllowList": [
+				"Win64",
+				"Windows"
+			]
+		},
+		{
+			"Name": "PivotTool",
+			"Enabled": true,
+			"MarketplaceURL": "com.epicgames.launcher://ue/marketplace/content/a220ab040cb844beb355b0f159eabefa"
+		},
+		{
+			"Name": "GameplayAbilities",
+			"Enabled": true
+		},
+		{
+			"Name": "FMODStudio",
+			"Enabled": true
+		},
+		{
+			"Name": "GeometryScripting",
+			"Enabled": true
+		},
+		{
+			"Name": "PCG",
+			"Enabled": true
+		},
+		{
+			"Name": "PCGGeometryScriptInterop",
+			"Enabled": true
+		},
+		{
+			"Name": "PCGExternalDataInterop",
+			"Enabled": true
+		},
+		{
+			"Name": "ChaosVehiclesPlugin",
+			"Enabled": true
+		},
+		{
+			"Name": "EditorScriptingUtilities",
+			"Enabled": true
+		},
+		{
+			"Name": "Gridly",
+			"Enabled": true
+		},
+		{
+			"Name": "AlembicHairImporter",
+			"Enabled": true
+		},
+		{
+			"Name": "HairModelingToolset",
+			"Enabled": true
+		},
+		{
+			"Name": "HairCardGenerator",
+			"Enabled": true
+		},
+		{
+			"Name": "GameplayBehaviorSmartObjects",
+			"Enabled": true
+		},
+		{
+			"Name": "SmartObjects",
+			"Enabled": true
+		},
+		{
+			"Name": "GameplayStateTree",
+			"Enabled": true
+		},
+		{
+			"Name": "GameplayInteractions",
+			"Enabled": true
+		},
+		{
+			"Name": "FMODStudioNiagara",
+			"Enabled": true
+		},
+		{
+			"Name": "BinkMedia",
+			"Enabled": true
+		},
+		{
+			"Name": "AndroidMedia",
+			"Enabled": false
+		},
+		{
+			"Name": "AndroidMoviePlayer",
+			"Enabled": false
+		},
+		{
+			"Name": "AppleMoviePlayer",
+			"Enabled": false
+		},
+		{
+			"Name": "NintendoMedia",
+			"Enabled": false
+		},
+		{
+			"Name": "PS4Media",
+			"Enabled": false
+		},
+		{
+			"Name": "PS5Media",
+			"Enabled": false,
+			"SupportedTargetPlatforms": [
+				"PS5"
+			]
+		},
+		{
+			"Name": "AppleImageUtils",
+			"Enabled": false
+		},
+		{
+			"Name": "ImpostorBaker",
+			"Enabled": true
+		},
+		{
+			"Name": "MovieRenderPipeline",
+			"Enabled": true
+		},
+		{
+			"Name": "ElectraCodecs",
+			"Enabled": true,
+			"PlatformDenyList": [
+				"PS4",
+				"PS5",
+				"XSX",
+				"WinGDK",
+				"XB1",
+				"Windows"
+			]
+		},
+		{
+			"Name": "ElectraCDM",
+			"Enabled": true,
+			"PlatformDenyList": [
+				"PS4",
+				"PS5",
+				"XSX",
+				"WinGDK",
+				"XB1",
+				"Windows"
+			]
+		},
+		{
+			"Name": "ElectraSubtitles",
+			"Enabled": true,
+			"PlatformDenyList": [
+				"PS4",
+				"PS5",
+				"XSX",
+				"WinGDK",
+				"XB1",
+				"Windows"
+			]
+		},
+		{
+			"Name": "ElectraUtil",
+			"Enabled": true,
+			"PlatformDenyList": [
+				"PS4",
+				"PS5",
+				"XSX",
+				"WinGDK",
+				"XB1",
+				"Windows"
+			]
+		},
+		{
+			"Name": "OpusDecoderElectra",
+			"Enabled": true,
+			"PlatformDenyList": [
+				"PS4",
+				"PS5",
+				"XSX",
+				"WinGDK",
+				"XB1",
+				"Windows"
+			]
+		},
+		{
+			"Name": "ElectraPlayer",
+			"Enabled": true,
+			"PlatformDenyList": [
+				"PS4",
+				"PS5",
+				"XSX",
+				"WinGDK",
+				"XB1",
+				"Windows"
+			]
+		}
+	]
+}
