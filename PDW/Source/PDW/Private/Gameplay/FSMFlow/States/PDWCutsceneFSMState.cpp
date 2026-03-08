@@ -16,6 +16,7 @@
 #include "UI/Pages/PDWDialogueBasePage.h"
 #include "Data/PDWGameSettings.h"
 #include "QuestSettings.h"
+#include "HAL/IConsoleManager.h"
 
 #if WITH_EDITOR
 #include "ToxicUtilitiesSetting.h"
@@ -25,16 +26,26 @@
 
 //const FName UPDWCutsceneFSMState::TO_NEXT_ID = FName("ToNext");
 
+static TAutoConsoleVariable<int32> CVarPDWSkipAllCutscenes(
+	TEXT("pdw.SkipAllCutscenes"),
+	0,
+	TEXT("If non-zero, skips all cutscenes at FSM entry."),
+	ECVF_Default);
+
 void UPDWCutsceneFSMState::OnFSMStateEnter_Implementation(const FString& InOption /*= FString("")*/)
 {
-	#if WITH_EDITOR
-	if (UToxicUtilitiesSetting::Get()->bAutoSkipAllCutscenes)
+	const bool bSkipAllCutscenes =
+#if WITH_EDITOR
+		UToxicUtilitiesSetting::Get()->bAutoSkipAllCutscenes ||
+#endif
+		CVarPDWSkipAllCutscenes.GetValueOnGameThread() != 0;
+
+	if (bSkipAllCutscenes)
 	{
 		Super::OnFSMStateEnter_Implementation(InOption);
 		TriggerTransition(UFlowDeveloperSettings::GetSwitcherTag().GetTagName(), "");
 		return;
 	}
-	#endif
 
 	UPDWGameplayFunctionLibrary::ApplyQualitySettings(this, "Cutscene");
 
