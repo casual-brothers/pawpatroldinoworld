@@ -1,0 +1,11 @@
+{
+	"MainVersion": "20.5.6",
+	"MaxVersion": "20.9.9",
+
+	"AutoSDKPlatform": "Nintendo",
+
+	"//2": "these SDKs have a shader compiler issue",
+	"BannedSdkVersions": [
+		"19.0.0-19.0.99"
+	]
+}
