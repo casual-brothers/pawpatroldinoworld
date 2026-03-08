@@ -3,6 +3,7 @@ Engine/
 FeaturePacks/
 Samples/
 Templates/
+XboxPDBFileUtil/
 
 # Visual Studio and IDE state
 .vs/
