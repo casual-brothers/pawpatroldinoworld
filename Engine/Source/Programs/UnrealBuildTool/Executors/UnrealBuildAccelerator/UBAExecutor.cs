@@ -770,11 +770,19 @@ namespace UnrealBuildTool
 				}
 			}
 				
+			string application = action.CommandPath.FullName;
+			string arguments = action.CommandArguments;
+			if (ShouldRunNintendoToolViaShell(action.CommandPath))
+			{
+				application = BuildHostPlatform.Current.Shell.FullName;
+				arguments = $"/c set \"DOTNET_ROOT=\" && set \"DOTNET_HOST_PATH=\" && set \"DOTNET_MULTILEVEL_LOOKUP=1\" && set \"DOTNET_ROLL_FORWARD=LatestMajor\" && \"{action.CommandPath.FullName}\" {action.CommandArguments}";
+			}
+
 			ProcessStartInfo startInfo = new()
 			{
-				Application = action.CommandPath.FullName,
+				Application = application,
 				WorkingDirectory = action.WorkingDirectory.FullName,
-				Arguments = action.CommandArguments,
+				Arguments = arguments,
 				Priority = priority,
 				UserData = action,
 				Description = description,
@@ -784,6 +792,19 @@ namespace UnrealBuildTool
 
 			return startInfo;
 		}
+
+		static bool ShouldRunNintendoToolViaShell(FileReference commandPath)
+		{
+			string fileName = commandPath.GetFileName();
+			if (!fileName.Equals("MakeMeta.exe", StringComparison.OrdinalIgnoreCase)
+				&& !fileName.Equals("MakeNso.exe", StringComparison.OrdinalIgnoreCase))
+			{
+				return false;
+			}
+
+			return commandPath.FullName.Contains("\\NintendoSDK\\Tools\\CommandLineTools\\", StringComparison.OrdinalIgnoreCase);
+		}
+
 		void DecrementCacheableAction()
 		{
 			if (Interlocked.Decrement(ref _cacheableActionsLeft) == 0)

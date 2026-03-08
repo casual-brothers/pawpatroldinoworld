@@ -954,9 +954,11 @@ namespace AutomationTool
 			{
 				Dictionary<string, string> FinalEnv = (Env != null) ? new Dictionary<string, string>(Env) : new Dictionary<string, string>();
 			
-				// We're clearing DOTNET_MULTILEVEL_LOOKUP and DOTNET_ROLL_FORWARD for any external programs to avoid enforcing our version of .NET
-				// on applications that may not be compatible with it e.g. requiring a newer version that may be installed on the system
-				// as part of their installer.
+				// We're clearing DOTNET_* for any external programs to avoid enforcing our version of .NET
+				// on applications that may not be compatible with it e.g. requiring a newer version that may be
+				// installed on the system as part of their installer.
+				FinalEnv["DOTNET_ROOT"] = "";
+				FinalEnv["DOTNET_HOST_PATH"] = "";
 				FinalEnv["DOTNET_MULTILEVEL_LOOKUP"] = "";
 				FinalEnv["DOTNET_ROLL_FORWARD"] = "";
 

@@ -235,7 +235,21 @@ namespace UnrealBuildTool
 		{
 			CancellationToken.ThrowIfCancellationRequested();
 
-			using ManagedProcess Process = new ManagedProcess(ProcessGroup, Action.CommandPath.FullName, Action.CommandArguments, Action.WorkingDirectory.FullName, null, null, ProcessPriority);
+			string fileName = Action.CommandPath.GetFileName();
+			string commandPath = Action.CommandPath.FullName;
+			string commandArguments = Action.CommandArguments;
+			Dictionary<string, string>? environment = null;
+			if ((fileName.Equals("MakeMeta.exe", StringComparison.OrdinalIgnoreCase) || fileName.Equals("MakeNso.exe", StringComparison.OrdinalIgnoreCase))
+				&& commandPath.Contains("\\NintendoSDK\\Tools\\CommandLineTools\\", StringComparison.OrdinalIgnoreCase))
+			{
+				environment = ManagedProcess.GetCurrentEnvVars();
+				environment.Remove("DOTNET_ROOT");
+				environment.Remove("DOTNET_HOST_PATH");
+				environment["DOTNET_MULTILEVEL_LOOKUP"] = "1";
+				environment["DOTNET_ROLL_FORWARD"] = "LatestMajor";
+			}
+
+			using ManagedProcess Process = new ManagedProcess(ProcessGroup, commandPath, commandArguments, Action.WorkingDirectory.FullName, environment, null, ProcessPriority);
 
 			using MemoryStream StdOutStream = new MemoryStream();
 			await Process.CopyToAsync(StdOutStream, CancellationToken);

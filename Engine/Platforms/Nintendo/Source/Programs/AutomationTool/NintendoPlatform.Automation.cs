@@ -1526,7 +1526,8 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 			// run MakeMeta to make a new .npdm
 			string MakeMetaExe = Path.Combine(NintendoExports.GetSDKInstallLocation(), "Tools/CommandLineTools/MakeMeta/MakeMeta.exe");
 			string MakeMetaCommandLine = NintendoExports.GetMakeMetaCommandline(MetaFile, DescFile, NpdmFile, AuthoringToolPlatformArg);
-			if (Run(MakeMetaExe, MakeMetaCommandLine).ExitCode > 0)
+			string WrappedMakeMetaCommandLine = $"/C set \"DOTNET_ROOT=\" && set \"DOTNET_HOST_PATH=\" && set \"DOTNET_MULTILEVEL_LOOKUP=1\" && set \"DOTNET_ROLL_FORWARD=LatestMajor\" && \"{MakeMetaExe}\" {MakeMetaCommandLine}";
+			if (Run("cmd.exe", WrappedMakeMetaCommandLine).ExitCode > 0)
 			{
 				// restore Npdm before we crap out
 				File.Delete(NpdmFile);

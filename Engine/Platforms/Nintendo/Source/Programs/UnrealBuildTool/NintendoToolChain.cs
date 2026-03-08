@@ -2089,8 +2089,8 @@ namespace UnrealBuildTool
 
 					Action NsoAction = Graph.CreateAction(ActionType.Link);
 					NsoAction.WorkingDirectory = Unreal.EngineSourceDirectory;
-					NsoAction.CommandPath = NintendoInfo.MakeNso;
-					NsoAction.CommandArguments = $"\"{InitialOutputFile.AbsolutePath}\" \"{NewNsoFilePath}\"";
+					NsoAction.CommandPath = BuildHostPlatform.Current.Shell;
+					NsoAction.CommandArguments = $"/c set \"DOTNET_ROOT=\" && set \"DOTNET_HOST_PATH=\" && set \"DOTNET_MULTILEVEL_LOOKUP=1\" && set \"DOTNET_ROLL_FORWARD=LatestMajor\" && \"{NintendoInfo.MakeNso}\" \"{InitialOutputFile.AbsolutePath}\" \"{NewNsoFilePath}\"";
 					NsoAction.ProducedItems.Add(NsoFile);
 					NsoAction.PrerequisiteItems.Add(InitialOutputFile);
 					NsoAction.bCanExecuteRemotely = false;
@@ -2108,9 +2108,10 @@ namespace UnrealBuildTool
 					FileItem NpdmFile = FileItem.GetItemByPath(NpdmFilePath);
 					Action NpdmAction = Graph.CreateAction(ActionType.Link);
 					NpdmAction.WorkingDirectory = Unreal.EngineSourceDirectory;
-					NpdmAction.CommandPath = NintendoInfo.MakeMeta;
+					NpdmAction.CommandPath = BuildHostPlatform.Current.Shell;
+					// Clear Unreal's bundled dotnet variables so SDK-hosted tools can use the system runtime they require.
 					string MakeMetaCommandLine = GetMakeMetaCommandline(MetaFilePath, DescFilePath, NpdmFilePath, ToolPlatformArg);
-					NpdmAction.CommandArguments = MakeMetaCommandLine;
+					NpdmAction.CommandArguments = $"/c set \"DOTNET_ROOT=\" && set \"DOTNET_HOST_PATH=\" && set \"DOTNET_MULTILEVEL_LOOKUP=1\" && set \"DOTNET_ROLL_FORWARD=LatestMajor\" && \"{NintendoInfo.MakeMeta}\" {MakeMetaCommandLine}";
 					NpdmAction.ProducedItems.Add(NpdmFile);
 					NpdmAction.PrerequisiteItems.Add(FileItem.GetItemByPath(DescFilePath));
 					NpdmAction.PrerequisiteItems.Add(FileItem.GetItemByPath(MetaFilePath));

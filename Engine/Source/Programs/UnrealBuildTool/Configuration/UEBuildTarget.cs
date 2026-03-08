@@ -6117,6 +6117,17 @@ namespace UnrealBuildTool
 					RulesObject.bUsePrecompiled = false;
 				}
 
+				// Force source compilation for Switch PlatformCrypto modules. SDK 21 changes nn::crypto
+				// symbols, and stale installed-build objects from the engine plugin are not compatible.
+				if (Platform == UnrealTargetPlatform.Switch
+					&& (ModuleName.Equals("PlatformCrypto", StringComparison.OrdinalIgnoreCase)
+						|| ModuleName.Equals("PlatformCryptoTypes", StringComparison.OrdinalIgnoreCase)
+						|| ModuleName.Equals("PlatformCryptoContext", StringComparison.OrdinalIgnoreCase)))
+				{
+					RulesObject.bUsePrecompiled = false;
+					RulesObject.bPrecompile = false;
+				}
+
 				// Get the base directory for paths referenced by the module. If the module's under the UProject source directory use that, otherwise leave it relative to the Engine source directory.
 				if (ProjectFile != null)
 				{
