@@ -8,9 +8,9 @@ public class PDWEditorTarget : TargetRules
 	public PDWEditorTarget(TargetInfo Target) : base(Target)
 	{
 		Type = TargetType.Editor;
-		DefaultBuildSettings = BuildSettingsVersion.V5;
-		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_5;
+		DefaultBuildSettings = BuildSettingsVersion.V6;
+		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_7;
 		ExtraModuleNames.Add("PDW");
-        ExtraModuleNames.Add("ToxicUtilities");
-    }
+		ExtraModuleNames.Add("ToxicUtilities");
+	}
 }
