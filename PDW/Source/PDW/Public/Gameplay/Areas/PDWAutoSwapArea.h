@@ -32,7 +32,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AutoSwapPupConfiguration")
 	TSubclassOf<UPDWGASAbility> AllowedAbility{ nullptr };
 
-	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = EAutoSwapRule))
+	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = "/Script/PDW.EAutoSwapRule"))
 	uint8 AutoSwapRule{ 0 };
 
 };

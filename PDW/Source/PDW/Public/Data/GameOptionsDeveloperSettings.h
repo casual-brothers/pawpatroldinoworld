@@ -56,7 +56,7 @@ public:
 
 public:
 
-    UPROPERTY(EditAnywhere, Config, Category="Input Data", meta=(AllowedClasses="PDWInputsData"))
+    UPROPERTY(EditAnywhere, Config, Category="Input Data", meta=(AllowedClasses="/Script/PDW.PDWInputsData"))
     TSoftObjectPtr<UPDWInputsData> DefaultInputData;
 	
 

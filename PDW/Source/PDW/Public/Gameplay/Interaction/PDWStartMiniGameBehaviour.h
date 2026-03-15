@@ -45,7 +45,7 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Configuration", BlueprintReadWrite)
 	FGameplayTag AllowedPup = FGameplayTag::EmptyTag;
 
-	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = EAutoSwapType), Category = "Configuration")
+	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = "/Script/PDW.EAutoSwapType"), Category = "Configuration")
 	uint8 AutoSwapConfiguration;
 
 	bool bMinigameTriggered = false;

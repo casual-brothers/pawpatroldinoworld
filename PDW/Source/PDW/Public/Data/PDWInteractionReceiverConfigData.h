@@ -56,7 +56,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FGameplayTag StartingState = FGameplayTag::EmptyTag;
 
-	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = EInteractionCheckConfig))
+	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = "/Script/PDW.EInteractionCheckConfig"))
 	uint8 InteractionConfiguration = (uint8)(EInteractionCheckConfig::WorkOnClosest);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)

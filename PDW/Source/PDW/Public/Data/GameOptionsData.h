@@ -62,7 +62,7 @@ protected:
 	UPROPERTY(Config, EditAnywhere, Category = "UI")
 	TSubclassOf<UGameOptionsSelectorWidget> OverrideSelector{ nullptr };
 		
-	UPROPERTY(Config, EditAnywhere, Category = "Settings", Meta = (Bitmask, BitmaskEnum = "EPlatformAvailability"))
+	UPROPERTY(Config, EditAnywhere, Category = "Settings", Meta = (Bitmask, BitmaskEnum = "/Script/PDW.EPlatformAvailability"))
 	int32 PlatformAvailability = 63 + 64;
 
 };
@@ -176,7 +176,7 @@ protected:
 	UPROPERTY(Config, EditAnywhere)
 	EQualityGameOptionsValue DefaultValue{ EQualityGameOptionsValue::Medium };
 
-	UPROPERTY(Config, EditAnywhere, Meta = (Bitmask, BitmaskEnum = "EQualityGameOptionsValue"))
+	UPROPERTY(Config, EditAnywhere, Meta = (Bitmask, BitmaskEnum = "/Script/PDW.EQualityGameOptionsValue"))
 	int32 QualityAvailability{ 15 };
 
 };

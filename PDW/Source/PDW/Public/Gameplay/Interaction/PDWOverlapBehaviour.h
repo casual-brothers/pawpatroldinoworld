@@ -78,7 +78,7 @@ protected:
 	UPROPERTY()
 	FPDWOverlapBehaviourInizializzation BehaviourInformation;
 
-	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = EOverlapBehaviourConfig), Category = "Configuration")
+	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = "/Script/PDW.EOverlapBehaviourConfig"), Category = "Configuration")
 	uint8 OverlapConfiguration;
 
 };

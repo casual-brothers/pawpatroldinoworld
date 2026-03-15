@@ -116,7 +116,7 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent)
 	void K2_Tick(float DeltaTime);
 
-	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = EAbilityInputBehavior), Category = "Configuration")
+	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = "/Script/PDW.EAbilityInputBehavior"), Category = "Configuration")
 	uint8 AbilityInputConfiguration;
 
 	UPROPERTY(EditAnywhere, Category = "Configuration")

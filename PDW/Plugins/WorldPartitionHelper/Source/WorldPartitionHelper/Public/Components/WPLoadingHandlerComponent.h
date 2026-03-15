@@ -45,7 +45,7 @@ public:
 
 protected:
 
-	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = ESetUpBehavior, ToolTip = "For Character use EnableAILogic instead of Gravity"))
+	UPROPERTY(EditAnywhere, meta = (Bitmask, BitmaskEnum = "/Script/WorldPartitionHelper.ESetUpBehavior", ToolTip = "For Character use EnableAILogic instead of Gravity"))
 	uint8 SetUpBehavior;
 
 	virtual void BeginPlay() override;
