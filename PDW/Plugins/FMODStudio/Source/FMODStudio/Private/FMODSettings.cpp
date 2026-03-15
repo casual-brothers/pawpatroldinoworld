@@ -32,6 +32,8 @@ inline EFMODPlatforms::Type CurrentPlatform()
     platform = EFMODPlatforms::Android;
 #elif PLATFORM_IOS || PLATFORM_TVOS
     platform = EFMODPlatforms::IOS;
+#elif PLATFORM_SWITCH2
+    platform = EFMODPlatforms::Switch;
 #endif
     return platform;
 }
