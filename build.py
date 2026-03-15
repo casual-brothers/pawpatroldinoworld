@@ -255,7 +255,7 @@ def build():
             f'-project="{PROJECT_PATH}" -target={TARGET_NAME} -unrealexe="{UNREALEXE}" '
             f'-platform={uat_platform} -stage -archive -package {compile_str} -pak -compressed '
             f'-archivedirectory="{archive_dir}" -manifests -clientconfig={configuration} '
-            f'-nodebuginfo -NoPDB -nocompileuat {rebuild_flag} {submission_str} '
+            f'-nodebuginfo -nocompileuat {rebuild_flag} {submission_str} '
             f'{release_flag}'
         )
         result = subprocess.run(command, shell=True, cwd=WORKSPACE_ROOT)
@@ -322,7 +322,7 @@ main_frame.pack(padx=10, pady=5)
 platform_frame = tk.LabelFrame(main_frame, text="Platforms")
 platform_frame.pack(side=tk.LEFT, padx=10)
 
-platforms = ["Switch", "XB1", "XSX", "WinGDK", "PS4", "PS5", "EOS"]
+platforms = ["Switch", "Switch2", "XB1", "XSX", "WinGDK", "PS4", "PS5", "EOS"]
 platform_vars = {}
 for plat in platforms:
     var = tk.BooleanVar(value=False)
@@ -364,7 +364,7 @@ tk.Checkbutton(options_frame, text="Copy", variable=copy_var).pack(anchor="w", p
 tk.Checkbutton(options_frame, text="Delivery", variable=delivery_var).pack(anchor="w", padx=10)
 tk.Checkbutton(options_frame, text="Modify PO", variable=modify_po_var).pack(anchor="w", padx=10)
 
-patch_panel = patch_ops.PatchPanel(main_frame, platforms=["PS4", "PS5", "Switch"])
+patch_panel = patch_ops.PatchPanel(main_frame, platforms=["PS4", "PS5", "Switch", "Switch2"])
 patch_panel.pack(fill="x", padx=10, pady=8)
 
 launch_btn = tk.Button(root, text="Build", command=build)

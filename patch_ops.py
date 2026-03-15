@@ -25,6 +25,16 @@ SWITCH_DESC = os.environ.get(
 )
 SWITCH_CACHE = os.environ.get("PDW_SWITCH_CACHE", r"d:\patch-cache")
 
+SWITCH2_TOOL = os.environ.get(
+    "PDW_SWITCH2_AUTHORING_TOOL",
+    r"C:\Nintendo\NativeSDK20.5.28_Ounce\NintendoSDK\Tools\CommandLineTools\AuthoringTool\AuthoringTool.exe",
+)
+SWITCH2_DESC = os.environ.get(
+    "PDW_SWITCH2_DESC",
+    r"C:\Nintendo\NativeSDK20.5.28_Ounce\NintendoSDK\Resources\SpecFiles\Desc\Ounce-ounce-a64\Application.autogen.desc",
+)
+SWITCH2_CACHE = os.environ.get("PDW_SWITCH2_CACHE", r"d:\patch-cache-switch2")
+
 PROSPERO_SDK_DIR = os.environ.get("SCE_PROSPERO_SDK_DIR", "")
 PS5_TOOL = os.path.join(
     PROSPERO_SDK_DIR, "..", "..", "PROSPERO", "Tools", "Publishing Tools", "bin", "prospero-pub-cmd.exe"
@@ -191,6 +201,8 @@ def run_patch(platform: str, original_path: str, latest_patch_path: str) -> int:
 
     if platform_norm in ("SWITCH", "NSW", "NINTENDO SWITCH"):
         return _run_patch_switch(original_path, latest_patch_path)
+    if platform_norm == "SWITCH2":
+        return _run_patch_switch2(original_path, latest_patch_path)
     if platform_norm == "PS4":
         return _run_patch_ps4(original_path, latest_patch_path)
     if platform_norm == "PS5":
@@ -252,6 +264,61 @@ def _run_patch_switch(original_path: str, latest_path: str) -> int:
         return 6
 
     print(f"[PATCH][SWITCH] OK -> {out_path}")
+    return 0
+
+
+def _run_patch_switch2(original_path: str, latest_path: str) -> int:
+    if not _is_executable(SWITCH2_TOOL):
+        print(f"[PATCH][SWITCH2] ERROR: AuthoringTool not found: {SWITCH2_TOOL}")
+        return 2
+    if not os.path.isfile(SWITCH2_DESC):
+        print(f"[PATCH][SWITCH2] ERROR: DESC file not found: {SWITCH2_DESC}")
+        return 3
+    if not os.path.isfile(original_path):
+        print(f"[PATCH][SWITCH2] ERROR: Original NSP not found: {original_path}")
+        return 4
+
+    latest_exists = bool(latest_path) and os.path.isfile(latest_path)
+    base_for_name = latest_path if latest_exists else original_path
+    out_path = _platform_outdir("Switch2") / f"{_stem(base_for_name)}_PATCH.nsp"
+
+    switch2_outdir = _platform_outdir("Switch2")
+    current_path = None
+    for name in os.listdir(switch2_outdir):
+        if name.lower().endswith(".nsp"):
+            current_path = str(switch2_outdir / name)
+            break
+    if not current_path:
+        print(f"[PATCH][SWITCH2] ERROR: No .nsp found in {switch2_outdir} to use as --current")
+        return 5
+
+    cmd = [
+        SWITCH2_TOOL,
+        "makepatch",
+        "-o",
+        str(out_path),
+        "--cache-directory",
+        SWITCH2_CACHE,
+        "--desc",
+        SWITCH2_DESC,
+        "--original",
+        original_path,
+        "--current",
+        current_path,
+    ]
+    if latest_exists:
+        cmd += ["--previous", latest_path]
+
+    _print_cmd("PATCH][SWITCH2", cmd)
+    rc = subprocess.run(cmd, shell=False).returncode
+    if rc != 0:
+        print(f"[PATCH][SWITCH2] makepatch failed with code {rc}")
+        return rc
+    if not out_path.is_file():
+        print(f"[PATCH][SWITCH2] ERROR: Output not found: {out_path}")
+        return 6
+
+    print(f"[PATCH][SWITCH2] OK -> {out_path}")
     return 0
 
 
