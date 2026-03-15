@@ -21,6 +21,7 @@
 /Engine/
 /Backup/
 /Library/
+/.claude/
 
 # Ignore local Unreal source distribution files unpacked at repo root
 /Builds/
