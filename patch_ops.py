@@ -61,6 +61,23 @@ def _print_cmd(label: str, cmdlist: List[str]):
     print(f"[{label}] CMD: {line}")
 
 
+def _run_cmd(cmdlist: List[str]) -> int:
+    """Run a command, printing its output, and return the exit code."""
+    result = subprocess.run(
+        cmdlist,
+        shell=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    if result.stdout:
+        print(result.stdout, end="")
+    return result.returncode
+
+
 def _find_single_by_ext_prefixed(root_dir: Path, ext: str, prefix: Optional[str]) -> Optional[str]:
     if not root_dir.is_dir():
         return None
@@ -255,7 +272,7 @@ def _run_patch_switch(original_path: str, latest_path: str) -> int:
         cmd += ["--previous", latest_path]
 
     _print_cmd("PATCH][SWITCH", cmd)
-    rc = subprocess.run(cmd, shell=False).returncode
+    rc = _run_cmd(cmd)
     if rc != 0:
         print(f"[PATCH][SWITCH] makepatch failed with code {rc}")
         return rc
@@ -310,7 +327,7 @@ def _run_patch_switch2(original_path: str, latest_path: str) -> int:
         cmd += ["--previous", latest_path]
 
     _print_cmd("PATCH][SWITCH2", cmd)
-    rc = subprocess.run(cmd, shell=False).returncode
+    rc = _run_cmd(cmd)
     if rc != 0:
         print(f"[PATCH][SWITCH2] makepatch failed with code {rc}")
         return rc
@@ -337,7 +354,7 @@ def _run_patch_ps5(original_pkg: str, gp5_path: str) -> int:
     out_pkg = _platform_outdir("PS5") / f"{_stem(gp5)}.pkg"
     cmd = [PS5_TOOL, "img_create", "--for_submission", "--ref_pkg_path", original_pkg, gp5, str(out_pkg)]
     _print_cmd("PATCH][PS5", cmd)
-    rc = subprocess.run(cmd, shell=False).returncode
+    rc = _run_cmd(cmd)
     if rc != 0:
         print(f"[PATCH][PS5] img_create failed with code {rc}")
         return rc
@@ -365,14 +382,14 @@ def _run_patch_ps4(original_pkg: str, gp4_path: str) -> int:
 
     cmd_update = [PS4_TOOL, "gp4_proj_update", "--app_path", original_pkg, gp4]
     _print_cmd("PATCH][PS4", cmd_update)
-    rc = subprocess.run(cmd_update, shell=False).returncode
+    rc = _run_cmd(cmd_update)
     if rc != 0:
         print(f"[PATCH][PS4] gp4_proj_update failed with code {rc}")
         return rc
 
     cmd_create = [PS4_TOOL, "img_create", "--oformat", "pkg", gp4, str(out_dir)]
     _print_cmd("PATCH][PS4", cmd_create)
-    rc = subprocess.run(cmd_create, shell=False).returncode
+    rc = _run_cmd(cmd_create)
     if rc != 0:
         print(f"[PATCH][PS4] img_create failed with code {rc}")
         return rc

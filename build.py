@@ -1,11 +1,22 @@
-import json
 import os
-import shutil
 import subprocess
+import sys
+
+# Re-launch with pythonw.exe (no console) if running under python.exe
+if sys.executable.lower().endswith("python.exe"):
+    pythonw = sys.executable[:-10] + "pythonw.exe"
+    if os.path.isfile(pythonw):
+        subprocess.Popen([pythonw] + sys.argv)
+        sys.exit(0)
+
+import json
+import queue as _queue
+import shutil
+import threading
 import tkinter as tk
 import zipfile
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, scrolledtext, ttk
 
 import modificar_po
 import patch_ops
@@ -44,6 +55,63 @@ DELIVERY_TARGET_DIR = Path(
     )
 )
 
+# ---------------------------------------------------------------------------
+# Stdout redirector — thread-safe via a queue polled on the main thread
+# ---------------------------------------------------------------------------
+
+_log_queue: _queue.Queue = _queue.Queue()
+_current_proc: subprocess.Popen = None
+_stop_event = threading.Event()
+
+
+class _StdoutRedirector:
+    def write(self, text: str):
+        _log_queue.put(text)
+
+    def flush(self):
+        pass
+
+
+def _kill_current_proc():
+    """Kill the active subprocess tree via taskkill /T /F."""
+    proc = _current_proc
+    if proc is None:
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception as exc:
+        print(f"Error killing process tree: {exc}")
+
+
+def _run_streaming(command, **kwargs) -> int:
+    """Run a shell command, streaming stdout+stderr to print(). Returns returncode."""
+    global _current_proc
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=subprocess.CREATE_NO_WINDOW,
+        **kwargs,
+    )
+    _current_proc = proc
+    for line in proc.stdout:
+        if _stop_event.is_set():
+            break
+        print(line, end="", flush=True)
+    proc.wait()
+    _current_proc = None
+    return proc.returncode
+
+
+# ---------------------------------------------------------------------------
+# Config persistence
+# ---------------------------------------------------------------------------
 
 def save_config():
     config_data = {
@@ -88,6 +156,10 @@ def load_config():
     except Exception as exc:
         print(f"Error loading config: {exc}")
 
+
+# ---------------------------------------------------------------------------
+# Build helpers
+# ---------------------------------------------------------------------------
 
 def clean_directory(path: Path):
     if path.exists():
@@ -174,7 +246,13 @@ def run_buildpatchtool(build_version: str) -> int:
         f'-PrereqIds="VC2015_2022_x64"'
     )
     print(f"[EOS Delivery] {cmd}")
-    return subprocess.run(cmd, shell=True, cwd=WORKSPACE_ROOT).returncode
+    return _run_streaming(cmd, shell=True, cwd=WORKSPACE_ROOT)
+
+
+def _clear_log():
+    log_text.configure(state="normal")
+    log_text.delete("1.0", tk.END)
+    log_text.configure(state="disabled")
 
 
 def build():
@@ -217,7 +295,7 @@ def build():
     submission_str = "-distribution" if submission else ""
 
     save_config()
-    os.system("cls")
+    _clear_log()
 
     clean_directory(PROJECT_DIR / "Saved" / "Packages")
 
@@ -225,11 +303,12 @@ def build():
         clear_folder_contents(COPY_TARGET_DIR)
 
     for platform in selected_platforms:
+        if _stop_event.is_set():
+            break
         if modify_po_var.get():
             modificar_po.modify_po_for_platform(platform)
 
         build_status_var.set(f"Building: {platform} ({configuration})")
-        root.update_idletasks()
         print(f"\nPreparing for build: {platform}")
 
         if copy_enabled or delivery_enabled:
@@ -258,8 +337,8 @@ def build():
             f'-nodebuginfo -nocompileuat {rebuild_flag} {submission_str} '
             f'{release_flag}'
         )
-        result = subprocess.run(command, shell=True, cwd=WORKSPACE_ROOT)
-        if result.returncode != 0:
+        returncode = _run_streaming(command, shell=True, cwd=WORKSPACE_ROOT)
+        if returncode != 0:
             messagebox.showerror("Build Failed", f"Build failed for platform {platform}.\n\nSkipping Copy and Delivery.")
             continue
 
@@ -303,15 +382,48 @@ def build():
         elif copy_enabled:
             copy_built_files(platform)
 
-    build_status_var.set("Build completed.")
-    print("Build completed.")
-    root.bell()
+    if _stop_event.is_set():
+        build_status_var.set("Build stopped.")
+        print("\nBuild stopped by user.")
+    else:
+        build_status_var.set("Build completed.")
+        print("Build completed.")
+
+
+def _build_thread():
+    _stop_event.clear()
+    try:
+        build()
+    finally:
+        root.after(0, lambda: stop_btn.pack_forget())
+        root.after(0, lambda: launch_btn.pack())
+        if not _stop_event.is_set():
+            root.after(0, root.bell)
+
+
+def on_build_click():
+    _stop_event.clear()
+    launch_btn.pack_forget()
+    stop_btn.pack()
+    threading.Thread(target=_build_thread, daemon=True).start()
+
+
+def on_stop_click():
+    _stop_event.set()
+    _kill_current_proc()
+    build_status_var.set("Stopping...")
 
 
 def on_close():
     save_config()
+    _stop_event.set()
+    _kill_current_proc()
     root.destroy()
 
+
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
 
 root = tk.Tk()
 root.title(f"{TARGET_NAME} Build Launcher")
@@ -367,8 +479,12 @@ tk.Checkbutton(options_frame, text="Modify PO", variable=modify_po_var).pack(anc
 patch_panel = patch_ops.PatchPanel(main_frame, platforms=["PS4", "PS5", "Switch", "Switch2"])
 patch_panel.pack(fill="x", padx=10, pady=8)
 
-launch_btn = tk.Button(root, text="Build", command=build)
-launch_btn.pack(pady=10)
+btn_row = tk.Frame(root)
+btn_row.pack(pady=10)
+launch_btn = tk.Button(btn_row, text="Build", command=on_build_click, width=12)
+launch_btn.pack()
+stop_btn = tk.Button(btn_row, text="Stop", command=on_stop_click, width=12)
+# stop_btn starts hidden; shown only during build
 
 build_status_var = tk.StringVar(value="")
 build_status_label = tk.Label(root, textvariable=build_status_var, fg="blue")
@@ -377,6 +493,31 @@ build_status_label.pack()
 delivery_name_var = tk.StringVar(value="")
 delivery_name_label = tk.Label(root, textvariable=delivery_name_var, fg="green")
 delivery_name_label.pack()
+
+log_frame = tk.LabelFrame(root, text="Output")
+log_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+log_text = scrolledtext.ScrolledText(
+    log_frame, wrap=tk.WORD, height=20, state="disabled", font=("Consolas", 9)
+)
+log_text.pack(fill="both", expand=True, padx=5, pady=5)
+
+
+def _poll_log():
+    try:
+        while True:
+            text = _log_queue.get_nowait()
+            log_text.configure(state="normal")
+            log_text.insert(tk.END, text)
+            log_text.see(tk.END)
+            log_text.configure(state="disabled")
+    except _queue.Empty:
+        pass
+    root.after(50, _poll_log)
+
+
+sys.stdout = _StdoutRedirector()
+sys.stderr = _StdoutRedirector()
+_poll_log()
 
 load_config()
 root.protocol("WM_DELETE_WINDOW", on_close)
