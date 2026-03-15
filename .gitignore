@@ -101,6 +101,7 @@
 # Text files
 !*.txt
 !*.md
+!*.bmp
 
 # Swift files
 *.swift
