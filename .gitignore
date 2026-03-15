@@ -102,6 +102,12 @@
 !*.txt
 !*.md
 !*.bmp
+!*.png
+!*.jpg
+!*.jpeg
+!*.ico
+!*.gif
+!*.zip
 
 # Swift files
 *.swift
