@@ -1,0 +1,20 @@
+{
+	"DefaultContentID": "HP3768-CUSA53618_00-PROJECTWILDS0000",
+	"HP3768-CUSA53618_00-PROJECTWILDS0000":
+	{
+		"VideoRecordingLibrary": false
+	},
+	"MasterVersion": "01.00",
+	"ApplicationVersion": "01.00",
+	"VideoRecordingLibrary": false,
+	"DefaultTitleName": "PAW Patrol™: Dino World",
+	"TitleNames": {
+		"en-US"	: "PAW Patrol™: Dino World"
+	},
+	
+	"Passcode": "xiB6LnPDFRI3l2Cr6666eB458wawvjNm",
+	"StorageType": "bd25",
+	"BuildIsoImage": true,
+	"ParentalLevel": 1,
+	"PS5Compatible": true
+}
