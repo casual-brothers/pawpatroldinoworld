@@ -20,6 +20,42 @@
 # Ignore the local Unreal engine checkout entirely in this repo
 /Engine/
 /Backup/
+/Library/
+
+# Ignore local Unreal source distribution files unpacked at repo root
+/Builds/
+/FeaturePacks/
+/Samples/
+/Templates/
+/XboxPDBFileUtil/
+/GenerateProjectFiles.bat
+/GenerateProjectFiles.command
+/GenerateProjectFiles.sh
+/Setup.bat
+/Setup.command
+/Setup.sh
+/RegisterEngineVersion.cmd
+/Reconcile.bat
+/RevertUnchanged.bat
+/PULL_REQUEST_TEMPLATE.md
+/README.md
+/SECURITY.md
+/LICENSE.md
+/UE5.sln
+/Default.uprojectdirs
+/cpp.hint
+/.editorconfig
+/.gitattributes
+/.vsconfig
+/.uedependencies
+/build_config.json
+/patch_config.json
+
+# Ignore generated project files and local platform build data
+/PDW/Binaries/
+/PDW/Build/
+/PDW/*.sln
+/PDW/Platforms/*/Build/
 
 # C/C++ source files
 !*.c
@@ -305,3 +341,36 @@ Engine/Extras/ThirdPartyNotUE/SDKs/HostLinux/**
 # Ignore large FB data files
 /Engine/Source/ThirdParty/Facebook/IOS/**/*.yml
 /Engine/Source/ThirdParty/Facebook/IOS/**/*.json
+
+# Final root-level overrides for this repo
+/.editorconfig
+/.gitattributes
+/Builds/
+/FeaturePacks/
+/Samples/
+/Templates/
+/XboxPDBFileUtil/
+/GenerateProjectFiles.bat
+/GenerateProjectFiles.command
+/GenerateProjectFiles.sh
+/Setup.bat
+/Setup.command
+/Setup.sh
+/RegisterEngineVersion.cmd
+/Reconcile.bat
+/RevertUnchanged.bat
+/PULL_REQUEST_TEMPLATE.md
+/README.md
+/SECURITY.md
+/LICENSE.md
+/UE5.sln
+/Default.uprojectdirs
+/cpp.hint
+/.vsconfig
+/.uedependencies
+/build_config.json
+/patch_config.json
+/PDW/Binaries/
+/PDW/Build/
+/PDW/*.sln
+/PDW/Platforms/*/Build/

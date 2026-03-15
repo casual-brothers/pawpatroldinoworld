@@ -72,6 +72,15 @@ namespace UnrealBuildTool
 		{
 			base.SetUpGlobalEnvironment(Target, GlobalCompileEnvironment, GlobalLinkEnvironment);
 
+			string nxSDKDir = NintendoPlatformSDK.GetSDKInstallLocation()!;
+			NintendoPlatformSDK nintendoSDK = (UEBuildPlatformSDK.GetSDKForPlatform(Target.Platform.ToString()) as NintendoPlatformSDK)!;
+			FileReference? nvnGdLib = FileReference.FromString(nintendoSDK.GetNvnGdLibPath(nxSDKDir));
+			if (nvnGdLib != null)
+			{
+				GlobalCompileEnvironment.RootPaths.AddExtraPath(("NvnGraphicsDebugger", nvnGdLib.Directory.FullName));
+				GlobalLinkEnvironment.RootPaths.AddExtraPath(("NvnGraphicsDebugger", nvnGdLib.Directory.FullName));
+			}
+
 			TargetConfiguration = Target.Configuration;
 		}
 
@@ -101,7 +110,7 @@ namespace UnrealBuildTool
 				
 			DirectoryReference CommandLineToolsDir = DirectoryReference.Combine(SdkInstallDir, "Tools/CommandLineTools");
 			FileReference CompilerPath = FileReference.Combine(BinDir, "clang++.exe");
-			FileReference ArchiverPath = FileReference.Combine(BinDir, "aarch64-nintendo-nn-elf-ar.exe");
+			FileReference ArchiverPath = FileReference.Combine(BinDir, "llvm-ar.exe");
 			FileReference MakeNsoPath = FileReference.Combine(CommandLineToolsDir, "MakeNso/MakeNso.exe");
 			FileReference MakeNroPath = FileReference.Combine(CommandLineToolsDir, "MakeNro/MakeNro.exe");
 			FileReference MakeNrrPath = FileReference.Combine(CommandLineToolsDir, "MakeNrr/MakeNrr.exe");
@@ -133,23 +142,6 @@ namespace UnrealBuildTool
 		{
 			base.GetCompileArguments_Optimizations(CompileEnvironment, Arguments);
 
-			// Profile Guided Optimization (PGO) and Link Time Optimization (LTO)
-			if (CompileEnvironment.bPGOOptimize)
-			{
-				// Always enable LTO when using PGO.
-				Arguments.Add("-flto=thin");
-			}
-			else if (CompileEnvironment.bPGOProfile)
-			{
-				// Always enable LTO when generating PGO profile data.
-				Arguments.Add("-flto=thin");
-			}
-			else if (CompileEnvironment.bAllowLTCG)
-			{
-				// When not using PGO, enable LTO in shipping builds if opted-in by the build configuration.
-				Arguments.Add("-flto=thin");
-			}
-
 			if (CompileEnvironment.bOptimizeCode)
 			{
 				if (CompileEnvironment.OptimizationLevel == OptimizationMode.Size)
@@ -169,9 +161,9 @@ namespace UnrealBuildTool
 					}
 					else
 					{
-					Arguments.Add("-O3");
+						Arguments.Add("-O3");
+					}
 				}
-			}
 			}
 			else
 			{
@@ -250,7 +242,7 @@ namespace UnrealBuildTool
 				Arguments.Add("-fno-asynchronous-unwind-tables");
 			}
 
-			if (CompileEnvironment.Configuration == CppConfiguration.Shipping && !CompileEnvironment.bPGOProfile)
+			if (CompileEnvironment.Configuration == CppConfiguration.Shipping && !CompileEnvironment.bPGOProfile && !bMergeModules)
 			{
 				Arguments.Add("-fno-use-cxa-atexit");
 			}
@@ -263,8 +255,20 @@ namespace UnrealBuildTool
 			}
 		}
 
-		protected virtual void GetLinkArguments_Global(LinkEnvironment LinkEnvironment, List<string> Arguments)
+		protected override void GetLinkArguments_Optimizations(LinkEnvironment linkEnvironment, List<string> arguments)
 		{
+			base.GetLinkArguments_Optimizations(linkEnvironment, arguments);
+
+			if (linkEnvironment.bAllowLTCG || linkEnvironment.bPGOOptimize || linkEnvironment.bPGOProfile)
+			{
+				arguments.Add("-Wl,-mllvm,-enable-machine-outliner=never");
+			}
+		}
+
+		protected override void GetLinkArguments_Global(LinkEnvironment LinkEnvironment, List<string> Arguments)
+		{
+			base.GetLinkArguments_Global(LinkEnvironment, Arguments);
+
 			CppRootPaths RootPaths = LinkEnvironment.RootPaths;
 			ulong SDKVersion = NintendoPlatformSDK.GetSDKVersionInt();
 
@@ -276,49 +280,6 @@ namespace UnrealBuildTool
 			Arguments.Add("-Wl,--no-undefined");
 
 			Arguments.Add("-fuse-ld=lld.exe");
-
-			// Profile Guided Optimization (PGO) and Link Time Optimization (LTO)
-			if (LinkEnvironment.bPGOOptimize)
-			{
-				// Always enable LTO when using PGO.
-				Log.TraceInformationOnce("Enabling Profile Guided Optimization (PGO). Linking will take a while.");
-				DirectoryReference? PGODir = DirectoryReference.FromString(LinkEnvironment.PGODirectory!);
-				Arguments.Add($"-fprofile-instr-use=\"{NormalizeCommandLinePath(DirectoryReference.Combine(PGODir!, LinkEnvironment.PGOFilenamePrefix!), RootPaths)}\"");
-				Arguments.Add("-flto=thin");
-				// lld should consider logical cores when determining how many threads to use
-				Arguments.Add("-Wl,--thinlto-jobs=all");
-				Arguments.Add("-Wl,-mllvm,-enable-machine-outliner=never");
-			}
-			else if (LinkEnvironment.bPGOProfile)
-			{
-				// Always enable LTO when generating PGO profile data.
-				Log.TraceInformationOnce("Enabling Profile Guided Instrumentation (PGI). Linking will take a while.");
-				Arguments.Add("-fprofile-instr-generate");
-				Arguments.Add("-flto=thin");
-				// lld should consider logical cores when determining how many threads to use
-				Arguments.Add("-Wl,--thinlto-jobs=all");
-				Arguments.Add("-Wl,-mllvm,-enable-machine-outliner=never");
-			}
-			else if (LinkEnvironment.bAllowLTCG)
-			{
-				// When not using PGO, enable LTO in shipping builds if opted-in by the build configuration.
-				Log.TraceInformationOnce("Enabling Link Time Optimization (LTO). Linking may take a while.");
-				Arguments.Add("-flto=thin");
-				// lld should consider logical cores when determining how many threads to use
-				Arguments.Add("-Wl,--thinlto-jobs=all");
-				Arguments.Add("-Wl,-mllvm,-enable-machine-outliner=never");
-
-				DirectoryReference? ThinLTOCacheDir = DirectoryReference.FromString(LinkEnvironment.ThinLTOCacheDirectory);
-				if (ThinLTOCacheDir != null)
-				{
-					Arguments.Add($"-Wl,--thinlto-cache-dir=\"{NormalizeCommandLinePath(ThinLTOCacheDir, RootPaths)}\"");
-					string? ThinLTOCachePruningArgs = LinkEnvironment.ThinLTOCachePruningArguments;
-					if (ThinLTOCachePruningArgs != null)
-					{
-						Arguments.Add($"-Wl,--thinlto-cache-policy,{ThinLTOCachePruningArgs}");
-					}
-				}
-			}
 
 			if (NintendoPlatformSDK.bVerboseLinker)
 			{
@@ -350,9 +311,9 @@ namespace UnrealBuildTool
 				Arguments.Add("-Wl,--hash-style=gnu");
 			}
 
-			if (LinkEnvironment.Configuration == CppConfiguration.Shipping)
+			if (TargetRules?.bIdenticalCodeFolding == true)
 			{
-				Arguments.Add("-Wl,--icf=all"); // Enables ICF (Identical Code Folding). [all, safe] safe == fold functions that can be proven not to have their address taken.
+				Arguments.Add("-Wl,--icf=all");
 			}
 
 			if (LinkEnvironment.PackagePath != null)
@@ -381,25 +342,11 @@ namespace UnrealBuildTool
 				}
 			}
 
-			// Set the output directory for crashes
-			DirectoryReference? CrashDiagnosticDirectory = DirectoryReference.FromString(LinkEnvironment.CrashDiagnosticDirectory);
-			if (CrashDiagnosticDirectory != null)
-			{
-				if (DirectoryReference.Exists(CrashDiagnosticDirectory))
-				{
-					Arguments.Add($"-fcrash-diagnostics-dir=\"{NormalizeCommandLinePath(CrashDiagnosticDirectory, RootPaths)}\"");
-				}
-				else
-				{
-					Log.TraceWarningOnce("CrashDiagnosticDirectory has been specified but directory \"{CrashDiagnosticDirectory}\" does not exist. Linker argument \"-fcrash-diagnostics-dir\" has been discarded.", CrashDiagnosticDirectory);
-				}
-			}
-
 			if (LinkEnvironment.bCreateMapFile)
 			{
-				string MapFile = Utils.MakePathSafeToUseWithCommandLine(LinkEnvironment.OutputFilePath.ChangeExtension("map").ToString());
+				FileReference MapFile = LinkEnvironment.OutputFilePath.ChangeExtension("map");
 				Log.TraceInformationOnce("Creating map file {0}", MapFile);
-				Arguments.Add($"-Wl,-Map,{MapFile}");
+				Arguments.Add($"-Wl,-Map,\"{NormalizeCommandLinePath(MapFile, RootPaths)}\"");
 			}
 
 			Arguments.Add("-Wl,-O3");
@@ -415,8 +362,9 @@ namespace UnrealBuildTool
 			}
 		}
 
-		static void GetArchiveArguments_Global(LinkEnvironment LinkEnvironment, List<string> Arguments)
+		protected override void GetArchiveArguments_Global(LinkEnvironment LinkEnvironment, List<string> Arguments)
 		{
+			base.GetArchiveArguments_Global(LinkEnvironment, Arguments);
 			Arguments.Add("rc");
 		}
 
@@ -1786,6 +1734,7 @@ namespace UnrealBuildTool
 			LinkAction.WorkingDirectory = Unreal.EngineSourceDirectory;
 			LinkAction.CommandPath = ToolPath;
 			LinkAction.CommandVersion = ToolVersion;
+			LinkAction.ArtifactMode = ArtifactMode.Enabled;
 
 			// build this up over the rest of the function
 			List<string> LinkArguments = new();
@@ -2089,8 +2038,8 @@ namespace UnrealBuildTool
 
 					Action NsoAction = Graph.CreateAction(ActionType.Link);
 					NsoAction.WorkingDirectory = Unreal.EngineSourceDirectory;
-					NsoAction.CommandPath = BuildHostPlatform.Current.Shell;
-					NsoAction.CommandArguments = $"/c set \"DOTNET_ROOT=\" && set \"DOTNET_HOST_PATH=\" && set \"DOTNET_MULTILEVEL_LOOKUP=1\" && set \"DOTNET_ROLL_FORWARD=LatestMajor\" && \"{NintendoInfo.MakeNso}\" \"{InitialOutputFile.AbsolutePath}\" \"{NewNsoFilePath}\"";
+					NsoAction.CommandPath = NintendoInfo.MakeNso;
+					NsoAction.CommandArguments = $"\"{InitialOutputFile.AbsolutePath}\" \"{NewNsoFilePath}\"";
 					NsoAction.ProducedItems.Add(NsoFile);
 					NsoAction.PrerequisiteItems.Add(InitialOutputFile);
 					NsoAction.bCanExecuteRemotely = false;
@@ -2108,10 +2057,9 @@ namespace UnrealBuildTool
 					FileItem NpdmFile = FileItem.GetItemByPath(NpdmFilePath);
 					Action NpdmAction = Graph.CreateAction(ActionType.Link);
 					NpdmAction.WorkingDirectory = Unreal.EngineSourceDirectory;
-					NpdmAction.CommandPath = BuildHostPlatform.Current.Shell;
-					// Clear Unreal's bundled dotnet variables so SDK-hosted tools can use the system runtime they require.
-					string MakeMetaCommandLine = GetMakeMetaCommandline(MetaFilePath, DescFilePath, NpdmFilePath, ToolPlatformArg);
-					NpdmAction.CommandArguments = $"/c set \"DOTNET_ROOT=\" && set \"DOTNET_HOST_PATH=\" && set \"DOTNET_MULTILEVEL_LOOKUP=1\" && set \"DOTNET_ROLL_FORWARD=LatestMajor\" && \"{NintendoInfo.MakeMeta}\" {MakeMetaCommandLine}";
+					NpdmAction.CommandPath = NintendoInfo.MakeMeta;
+					// for some reason, using string.Format() with -- was making ---- in the output string!
+					NpdmAction.CommandArguments = GetMakeMetaCommandline(MetaFilePath, DescFilePath, NpdmFilePath, ToolPlatformArg);
 					NpdmAction.ProducedItems.Add(NpdmFile);
 					NpdmAction.PrerequisiteItems.Add(FileItem.GetItemByPath(DescFilePath));
 					NpdmAction.PrerequisiteItems.Add(FileItem.GetItemByPath(MetaFilePath));
@@ -2172,6 +2120,10 @@ namespace UnrealBuildTool
 					string NrrDataDestination = Path.Combine(NrrDataDir, Path.GetFileName(NrrFile.AbsolutePath));
 
 					HashSet<string> NrrFiles = new();
+					foreach (string NroFile in NroFiles)
+					{
+						NspdAction.PrerequisiteItems.Add(MakeFileCopyAction(NroFile, Path.Combine(NroDataDir, Path.GetFileName(NroFile)), Graph));
+					}
 					foreach (ModuleRules.RuntimeDependency Dep in LinkEnvironment.RuntimeDependencies)
 					{
 						if (Path.GetExtension(Dep.Path).Equals(".nro", StringComparison.InvariantCultureIgnoreCase))
@@ -2278,7 +2230,7 @@ namespace UnrealBuildTool
 		{
 			List<FileItem> OutputFiles = new();
 
-			if (BinaryLinkEnvironment.bIsBuildingLibrary == false && BinaryLinkEnvironment.bCreateDebugInfo)
+			if (BinaryLinkEnvironment.bIsBuildingLibrary == false && BinaryLinkEnvironment.bIsBuildingDLL == false && BinaryLinkEnvironment.bCreateDebugInfo)
 			{
 				OutputFiles.AddRange(GenerateSymbols(Executable, BinaryLinkEnvironment, Graph));
 			}

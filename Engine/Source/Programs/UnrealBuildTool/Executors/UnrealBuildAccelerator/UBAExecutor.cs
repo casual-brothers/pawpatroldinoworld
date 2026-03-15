@@ -24,7 +24,9 @@ namespace UnrealBuildTool
 		public UnrealBuildAcceleratorConfig UBAConfig { get; init; } = new();
 
 		public string Crypto { get; private set; } = String.Empty;
-		public IServer? Server { get; private set; }
+
+		public bool CanRetryNatively { get; set; } = true;
+
 		ISessionServer? _session;
 		object _sessionLock = new();
 		IEnumerable<UnrealBuildAcceleratorCacheConfig> _cacheConfigs = [];
@@ -33,30 +35,15 @@ namespace UnrealBuildTool
 		readonly List<IUBAAgentCoordinator> _agentCoordinators = new();
 		DirectoryReference? _rootDirRef;
 		bool _bIsCancelled;
-		bool _bIsRemoteActionsAllowed = true;
-		readonly object _actionsChangedLock = new();
-		bool _bActionsChanged = true;
-		uint _errorCount = 0;
-		uint _actionsQueuedThatCanRunRemotely = UInt32.MaxValue;
 		readonly ThreadedLogger _threadedLogger;
 
 		DateTime _ubaStartTimeUtc = DateTime.UtcNow;
 		TimeSpan _ubaDurationWaitingForRemote = TimeSpan.Zero;
 
-		// Tracking for LinkedActions that failed remotely that should be retried locally
-		readonly ConcurrentDictionary<LinkedAction, bool> _localRetryActions = new();
-		// Tracking for LinkedActions that failed locally that should be retried without UBA
-		readonly ConcurrentDictionary<LinkedAction, bool> _forcedRetryActions = new();
-
 		// Tracking for successful coordinator connections
 		int _successfulCoordinatorConnections = 0;
 		// Tracking for failed coordinator connections
 		int _failedCoordinatorConnections = 0;
-
-		// Tracking for all actions processed locally
-		int _localProcessedActions = 0;
-		// Tracking for all actions processed remotely
-		int _remoteProcessedActions = 0;
 
 		int _cacheableActionsLeft = 0;
 
@@ -149,7 +136,7 @@ namespace UnrealBuildTool
 				Crypto = CreateCrypto();
 			}
 
-			_agentCoordinators.AddRange(UBAAgentCoordinatorHorde.Init(logger, this, targetDescriptors, UBAConfig, ref _remoteConnectionMode));
+			_agentCoordinators.AddRange(UBAAgentCoordinatorHorde.Init(logger, targetDescriptors, UBAConfig, ref _remoteConnectionMode));
 			_threadedLogger = new ThreadedLogger(logger);
 		}
 
@@ -191,7 +178,7 @@ namespace UnrealBuildTool
 		{
 			lock (_sessionLock)
 			{
-				_session?.UpdateStatus(statusRow, statusColumn, statusText, statusType, statusLink);
+				_session?.GetTrace().UpdateStatus(statusRow, statusColumn, statusText, statusType, statusLink);
 			}
 		}
 
@@ -245,6 +232,16 @@ namespace UnrealBuildTool
 				{
 					await writer.WriteLineAsync("remote: false");
 				}
+				uint bucket = GetCacheBucket(action);
+				if (bucket != 0)
+				{
+					await writer.WriteLineAsync($"cache: {bucket}");
+				}
+				uint memoryGroup = GetMemoryGroup(action);
+				if (memoryGroup != 0)
+				{
+					await writer.WriteLineAsync($"memgroup: {memoryGroup}");
+				}
 				if (action.PrerequisiteActions.Any())
 				{
 					await writer.WriteAsync("dep: [");
@@ -277,102 +274,6 @@ namespace UnrealBuildTool
 			}
 		}
 
-		class UBAArtifactCache : IArtifactCache
-		{
-			public ArtifactCacheState State => ArtifactCacheState.Available;
-			public Task<ArtifactCacheState> WaitForReadyAsync() => Task.FromResult(ArtifactCacheState.Available);
-			public Task<ArtifactAction[]> QueryArtifactActionsAsync(IoHash[] partialKeys, CancellationToken cancellationToken) => Task.FromResult(Array.Empty<ArtifactAction>());
-			public Task<bool[]?> QueryArtifactOutputsAsync(ArtifactAction[] artifactActions, CancellationToken cancellationToken) => Task.FromResult<bool[]?>(null);
-			public Task SaveArtifactActionsAsync(ArtifactAction[] artifactActions, CancellationToken cancellationToken) => Task.CompletedTask;
-			public Task FlushChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-		}
-
-		private static void RemoveLogLineSpam(List<string> logLines)
-		{
-			logLines.RemoveAll(line => 
-				line.StartsWith("   Creating library ", StringComparison.Ordinal) ||
-				line.StartsWith("   Creating object ", StringComparison.Ordinal) ||
-				line.EndsWith("file(s) copied.", StringComparison.Ordinal));
-		}
-
-		class UBAActionArtifactCache : IActionArtifactCache
-		{
-			readonly UBAExecutor _executor;
-			readonly UBAArtifactCache _cache = new UBAArtifactCache();
-			public UBAActionArtifactCache(UBAExecutor executor) { _executor = executor; }
-			public IArtifactCache ArtifactCache => _cache;
-			public bool EnableReads { get => true; set { } }
-			public bool EnableWrites { get => true; set { } }
-			public bool LogCacheMisses { get => true; set { } }
-			public DirectoryReference? EngineRoot { get => null; set { } }
-			public DirectoryReference[]? DirectoryRoots { get => null; set { } }
-			public Task<ActionArtifactResult> CompleteActionFromCacheAsync(LinkedAction action, CancellationToken cancellationToken)
-			{
-				return Task.Factory.StartNew(() =>
-				{
-					ProcessStartInfo startInfo = _executor.GetActionStartInfo(action);
-					uint bucket = _executor.GetCacheBucket(action);
-					ulong rootsHandle = _executor.GetActionRootsHandle(action);
-
-					IEnumerable<KeyValuePair<UnrealBuildAcceleratorCacheConfig, ICacheClient>> cacheClients;
-					if (_executor.UBAConfig.bCacheShuffle && _executor._cacheClients.Count > 1)
-					{
-						KeyValuePair<UnrealBuildAcceleratorCacheConfig, ICacheClient>[] array = [.. _executor._cacheClients];
-						Random r = new Random();
-						r.Shuffle(array);
-						cacheClients = array;
-					}
-					else
-					{
-						cacheClients = _executor._cacheClients;
-					}
-
-					foreach (KeyValuePair<UnrealBuildAcceleratorCacheConfig, ICacheClient> item in cacheClients)
-					{
-						if (item.Key.bRequireVfs && !action.RootPaths.bUseVfs)
-						{
-							continue;
-						}
-						FetchFromCacheResult result = item.Value.FetchFromCache(rootsHandle, bucket, startInfo);
-						int exitCode = 0;
-						RemoveLogLineSpam(result.LogLines);
-						if (result.Success && action.bForceWarningsAsError && result.LogLines.Any(x => x.Contains("): warning: ")))
-						{
-							result = new(true, result.LogLines.Select(x => x.Replace("): warning: ", "): error: ", StringComparison.OrdinalIgnoreCase)).ToList());
-							exitCode = 1;
-							++_executor._errorCount;
-						}
-						if (result.Success)
-						{
-							_executor.DecrementCacheableAction();
-							return new ActionArtifactResult(result.Success, result.LogLines, exitCode);
-						}
-					}
-					return new ActionArtifactResult(false, [], 0);
-				}, cancellationToken, TaskCreationOptions.LongRunning | TaskCreationOptions.PreferFairness, TaskScheduler.Default);
-			}
-
-			public Task ActionCompleteAsync(LinkedAction action, CancellationToken cancellationToken) => Task.CompletedTask;
-			public Task FlushChangesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-		}
-
-		private void ActionQueueCanceled(IStorageServer? ubaStorage)
-		{
-			_bIsCancelled = true;
-			Server?.StopServer(); // Make sure all remove processes are returned. We can't have any callbacks after this
-			_session?.CancelAll(); // Cancel all processes native side
-			ubaStorage?.SaveCasTable();
-
-			// We need the lock here since things are happening in parallel.
-			lock (_sessionLock)
-			{
-				foreach (IUBAAgentCoordinator coordinator in _agentCoordinators)
-				{
-					_agentCoordinators.ForEach(ac => ac.CloseAsync().Wait(2000)); // Give coordinators some time to close (this makes coordinators like horde return resources faster)
-				}
-			}
-		}
-
 		public override async Task<bool> ExecuteActionsAsync(IEnumerable<LinkedAction> inputActions, Microsoft.Extensions.Logging.ILogger logger, IActionArtifactCache? actionArtifactCache)
 		{
 			if (!inputActions.Any())
@@ -380,6 +281,7 @@ namespace UnrealBuildTool
 				return true;
 			}
 
+			// TODO: We still want to connect to coordinators because it might be that that input action is an action that spawns tons of internal processes (distributed thinlto linking)
 			if (inputActions.Count() < NumParallelProcesses && !UBAConfig.bForceBuildAllRemote)
 			{
 				UBAConfig.bDisableRemote = true;
@@ -483,7 +385,7 @@ namespace UnrealBuildTool
 				}
 
 				using EpicGames.UBA.ILogger ubaLogger = EpicGames.UBA.ILogger.CreateLogger(logger);
-				using (Server = IServer.CreateServer(UBAConfig.MaxWorkers, UBAConfig.SendSize, ubaLogger, UBAConfig.bUseQuic))
+				using (IServer Server = IServer.CreateServer(UBAConfig.MaxWorkers, UBAConfig.SendSize, ubaLogger, UBAConfig.bUseQuic))
 				{
 					_ubaLogger = ubaLogger;
 					using IStorageServer ubaStorageServer = IStorageServer.CreateStorageServer(Server, ubaLogger, new StorageServerCreateInfo(_rootDirRef.FullName, ((ulong)UBAConfig.StoreCapacityGb) * 1000 * 1000 * 1000, !UBAConfig.bStoreRaw, UBAConfig.Zone));
@@ -491,18 +393,38 @@ namespace UnrealBuildTool
 					{
 						try
 						{
-							_session = ISessionServer.CreateSessionServer(serverCreateInfo);
+							ISessionServer session = ISessionServer.CreateSessionServer(serverCreateInfo);
+							_session = session;
+							ITrace trace = session.GetTrace();
 
-							OnSessionCreated?.Invoke(_session);
+							OnSessionCreated?.Invoke(session);
 
-							if (_cacheableActionsLeft != 0 && _cacheConfigs.Any())
+							List<UnrealBuildAcceleratorCacheConfig> cacheConfigs = new();
+							if (_cacheableActionsLeft != 0)
 							{
-								_session.UpdateStatus(1, 1, "Cache", LogEntryType.Info, null);
-								_session.UpdateStatus(1, 6, "Connecting...", LogEntryType.Info);
-
-								foreach (UnrealBuildAcceleratorCacheConfig cacheConfig in _cacheConfigs)
+								if (!UBAConfig.bDisableRemote) // Need to match the InitAsync
 								{
-									ICacheClient cacheClient = ICacheClient.CreateCacheClient(_session, UBAConfig.bReportCacheMissReason, "", _cacheableActionsLeft != 0 ? GetCacheClientHint() : "");
+									using TraceTaskScope s = new(trace, "Requesting Horde cache", "");
+									foreach (IUBAAgentCoordinator coordinator in _agentCoordinators)
+									{
+										UnrealBuildAcceleratorCacheConfig? cacheConfig = coordinator.RequestCacheServer(new CancellationToken());
+										if (cacheConfig != null)
+											cacheConfigs.Add(cacheConfig);
+									}
+								}
+								if (_cacheConfigs.Any())
+									cacheConfigs.AddRange(_cacheConfigs);
+							}
+
+							if (cacheConfigs.Count > 0)
+							{
+								trace.UpdateStatus(1, 1, "Cache", LogEntryType.Info, null);
+								trace.UpdateStatus(1, 6, "Connecting...", LogEntryType.Info);
+
+								using TraceTaskScope s = new(trace, "Connecting to cache", "");
+								foreach (UnrealBuildAcceleratorCacheConfig cacheConfig in cacheConfigs)
+								{
+									ICacheClient cacheClient = ICacheClient.CreateCacheClient(session, UBAConfig.bReportCacheMissReason, cacheConfig.Crypto, GetCacheClientHint());
 									string[] nameAndPort = cacheConfig.CacheServer.Split(':');
 									int port = 1347;
 									if (nameAndPort.Length > 1)
@@ -511,21 +433,20 @@ namespace UnrealBuildTool
 									}
 
 									System.Diagnostics.Stopwatch stopwatch = System.Diagnostics.Stopwatch.StartNew();
-									bool cacheSuccess = cacheClient.Connect(nameAndPort[0], port);
+									bool cacheSuccess = cacheClient.Connect(nameAndPort[0], port, cacheConfig.DesiredConnectionCount);
 									long totalMs = stopwatch.ElapsedMilliseconds;
 									string successText = cacheSuccess ? "Connected to" : "Failed to connect to";
 									logger.LogInformation("UbaCache - {SuccessText} {Name}:{Port} ({Seconds}.{Milliseconds}s)", successText, nameAndPort[0], port, totalMs / 1000, totalMs % 1000);
 									if (cacheSuccess)
 									{
 										_cacheClients.Add(cacheConfig, cacheClient);
-										actionArtifactCache ??= new UBAActionArtifactCache(this);
 									}
 									else
 									{
 										cacheClient.Dispose();
 									}
 								}
-								_session.UpdateStatus(1, 6, _cacheClients.Any() ? "Connected" : "Failed to connect", LogEntryType.Info);
+								trace.UpdateStatus(1, 6, _cacheClients.Any() ? "Connected" : "Failed to connect", LogEntryType.Info);
 							}
 
 							ubaStorage = ubaStorageServer;
@@ -536,10 +457,10 @@ namespace UnrealBuildTool
 							}
 							else
 							{
-								_session.DisableRemoteExecution();
+								session.DisableRemoteExecution();
 							}
 
-							bool success = ExecuteActionsInternal(inputActions, _session, logger, actionArtifactCache, () => ActionQueueCanceled(ubaStorage));
+							bool success = ExecuteActionsInternal(inputActions, Server, ubaStorage, session, _cacheClients.Values);
 
 							if (!UBAConfig.bDisableRemote)
 							{
@@ -548,7 +469,7 @@ namespace UnrealBuildTool
 
 							if (UBAConfig.bPrintSummary)
 							{
-								_session.PrintSummary();
+								session.PrintSummary();
 							}
 
 							return success && !_bIsCancelled;
@@ -626,94 +547,390 @@ namespace UnrealBuildTool
 
 		public override bool VerifyOutputs => UBAConfig.bWriteToDisk;
 
+
+		(byte[]?, uint) BuildKnownInputs(LinkedAction action)
+		{
+			if (!UBAConfig.bUseKnownInputs)
+			{
+				return (null, 0);
+			}
+			
+			uint knownInputsCount = 0;
+			int sizeOfChar = System.OperatingSystem.IsWindows() ? 2 : 1;
+
+			int byteCount = 0;
+			foreach (FileItem item in action.PrerequisiteItems)
+			{
+				byteCount += (item.FullName.Length + 1) * sizeOfChar;
+				++knownInputsCount;
+			}
+
+			byte[] knownInputs = new byte[byteCount + sizeOfChar];
+
+			int byteOffset = 0;
+			foreach (FileItem item in action.PrerequisiteItems)
+			{
+				string str = item.FullName;
+				int strBytes = str.Length * sizeOfChar;
+				if (sizeOfChar == 1) // Unmanaged size uses ascii
+				{
+					System.Buffer.BlockCopy(System.Text.Encoding.ASCII.GetBytes(str.ToCharArray()), 0, knownInputs, byteOffset, strBytes);
+				}
+				else
+				{
+					System.Buffer.BlockCopy(str.ToCharArray(), 0, knownInputs, byteOffset, strBytes);
+				}
+
+				byteOffset += strBytes + sizeOfChar;
+			}
+			return (knownInputs, knownInputsCount);
+		}
+
+		class AgentCoordinatorScheduler : IUbaAgentCoordinatorScheduler
+		{
+			internal AgentCoordinatorScheduler(IScheduler scheduler, IServer server) { _scheduler = scheduler; _server = server; }
+			internal IScheduler? _scheduler;
+			internal IServer? _server;
+			public void Reset() { lock (this) { _scheduler = null; _server = null; } }
+			public bool IsEmpty { get { lock (this) return _scheduler != null ? _scheduler.IsEmpty : true; } }
+			public double GetProcessWeightThatCanRunRemotelyNow() { lock (this) return _scheduler != null ? _scheduler.GetProcessWeightThatCanRunRemotelyNow() : 0; }
+			public bool AddClient(string ip, int port, string crypto = "")
+			{
+				lock (this)
+				{
+					if (_server != null)
+					{
+						return _server.AddClient(ip, port, crypto);
+					}
+				}
+				return false;
+			}
+		}
+
 		/// <summary>
 		/// Executes the provided actions
 		/// </summary>
 		/// <returns>True if all the tasks successfully executed, or false if any of them failed.</returns>
-		bool ExecuteActionsInternal(IEnumerable<LinkedAction> inputActions, ISessionServer session, Microsoft.Extensions.Logging.ILogger logger, IActionArtifactCache? actionArtifactCache, System.Action onCancel)
+		bool ExecuteActionsInternal(IEnumerable<LinkedAction> inputActions, IServer server, IStorageServer storage, ISessionServer session, IEnumerable<ICacheClient> cache)
 		{
 			_ubaStartTimeUtc = DateTime.UtcNow;
-			using ImmediateActionQueue queue = CreateActionQueue(inputActions, actionArtifactCache, UBAConfig.CacheMaxWorkers, logger);
-			int actionLimit = Math.Min(NumParallelProcesses, queue.TotalActions);
-			queue.CreateAutomaticRunner(action => RunActionLocal(queue, action), bUseActionWeights, actionLimit, NumParallelProcesses);
-			ImmediateActionQueueRunner remoteRunner = queue.CreateManualRunner(action => RunActionRemote(queue, action, false));
-			ImmediateActionQueueRunner crossArchitectureRemoteRunner = queue.CreateManualRunner(action => RunActionRemote(queue, action, true));
-			queue.CancellationToken.Register(onCancel);
 
-			if (actionArtifactCache != null)
+			ActionLogger actionLogger = new(inputActions.Count(), "Compiling C++ source code...", x => WriteToolOutput(x), () => FlushToolOutput(), _threadedLogger)
 			{
-				queue.OnArtifactsRead += (action) => { UpdateCacheProgress(queue); UpdateProgress(queue); };
-				queue.OnArtifactsMiss += (action) => UpdateCacheProgress(queue);
-			}
+				ShowCompilationTimes = bShowCompilationTimes,
+				ShowCPUUtilization = bShowCPUUtilization,
+				PrintActionTargetNames = bPrintActionTargetNames,
+				LogActionCommandLines = bLogActionCommandLines,
+				ShowPerActionCompilationTimes = bShowPerActionCompilationTimes,
+				CompactOutput = bCompactOutput,
+			};
 
-			UpdateProgress(queue);
+			using IScheduler scheduler = IScheduler.CreateScheduler(session, cache, NumParallelProcesses, UBAConfig.bForceBuildAllRemote);
 
-			// Start the queue
-			queue.Start();
-
-			// Handle process available from remote
-			session!.RemoteProcessSlotAvailable += (sender, args) =>
+			var cancelBuild = () =>
 			{
-				ImmediateActionQueueRunner runner = args.IsCrossArchitecture ? crossArchitectureRemoteRunner : remoteRunner;
-				if (!queue.TryStartOneAction(runner) && (_bIsRemoteActionsAllowed && !UBAConfig.bForceBuildAllRemote))
+				if (_bIsCancelled)
+					return;
+				_bIsCancelled = true;
+				scheduler.Cancel();
+				foreach (ICacheClient client in cache)
+					client.Disconnect();
+				server?.StopServer(); // Make sure all remove processes are returned. We can't have any callbacks after this
+				session?.CancelAll(); // Cancel all processes native side
+				storage?.SaveCasTable();
+
+				// We need the lock here since things are happening in parallel.
+				lock (_sessionLock)
 				{
-					uint count = ActionsLeftThatCanRunRemotely(queue);
-
-					// We didn't find an action to start, let's check how many queued items are left.. if there are less than NumParallelProcesses, then disconnect
-					if (count <= NumParallelProcesses)
+					foreach (IUBAAgentCoordinator coordinator in _agentCoordinators)
 					{
-						_bIsRemoteActionsAllowed = false;
-						_agentCoordinators.ForEach(ac => ac.Stop());
-						session!.DisableRemoteExecution();
-					}
-					else
-					{
-						// Tell UBA max number of remote processes left. Providing this information makes it possible for UBA to start disconnecting clients
-						session!.SetMaxRemoteProcessCount(count);
+						_agentCoordinators.ForEach(ac => ac.CloseAsync().Wait(2000)); // Give coordinators some time to close (this makes coordinators like horde return resources faster)
 					}
 				}
 			};
 
-			session!.RemoteProcessReturned += (sender, args) =>
-			{
-				args.Process.Cancel(true);
-				LinkedAction action = (LinkedAction)args.Process.UserData!;
-				//logger.LogInformation("REQUEUING " + action.ProducedItems.FirstOrDefault()!.Name);
-				queue.RequeueAction(action);
-			};
 
-			// Add all actions we can add
-			queue.StartManyActions();
+
+			int totalActions = 0;
+			int cacheTotalActions = 0;
+			int cacheHitActions = 0;
+			int succeededActions = 0;
+			int failedActions = 0;
+			int localProcessedActions = 0;
+			int remoteProcessedActions = 0;
+			int localRetryActions = 0;
+			int forcedRetryActions = 0;
+			long peakProcessMemory = 0;
+			long peakTotalMemory = 0;
+			bool shouldCancel = false;
+
+			scheduler.SetProcessFinishedCallback((info) =>
+			{
+				int exitCode = info.ExitCode;
+
+				if (_bIsCancelled || exitCode == 99999) // Process was cancelled by executor
+				{
+					return ProcessFinishedResponse.None;
+				}
+
+				List<string> logLines = info.LogLines;
+
+				LinkedAction action = (LinkedAction)info.UserData;
+
+				string additionalDescription = string.Empty;
+
+				ProcessExecutionType executionType = info.ExecutionType;
+
+				switch (executionType)
+				{
+					case ProcessExecutionType.Skip:
+						{
+							return ProcessFinishedResponse.None;
+						}
+
+					case ProcessExecutionType.Remote:
+						{
+							if (_ubaDurationWaitingForRemote == TimeSpan.Zero)
+							{
+								_ubaDurationWaitingForRemote = DateTime.UtcNow - _ubaStartTimeUtc;
+							}
+
+							string executingHost = info.ExecutingHost ?? "Unknown";
+
+							var rerun = (string error) =>
+							{
+								_threadedLogger.LogInformation("{Description} {StatusDescription} [RemoteExecutor: {ExecutingHost}]: Exited with error code {ExitCode} ({Error}). This action will retry locally", action.CommandDescription, action.StatusDescription, executingHost, exitCode, error);
+								foreach (string line in logLines)
+								{
+									_threadedLogger.LogInformation(line);
+								}
+								++localRetryActions;
+								return ProcessFinishedResponse.RerunLocal;
+							};
+
+							if (exitCode != 0 && !logLines.Any())
+							{
+								_threadedLogger.LogInformation("{Description} {StatusDescription} [RemoteExecutor: {ExecutingHost}]: Exited with error code {ExitCode} with no output. This action will retry locally", action.CommandDescription, action.StatusDescription, executingHost, exitCode);
+								return ProcessFinishedResponse.RerunLocal;
+							}
+							else if ((uint)exitCode == 0xC0000005)
+							{
+								return rerun("Access violation");
+							}
+							else if ((uint)exitCode == 0xC0000409)
+							{
+								return rerun("Stack buffer overflow");
+							}
+							else if ((uint)exitCode == 0xC0000602)
+							{
+								return rerun("Fail Fast Exception");
+							}
+							else if (exitCode != 0 && logLines.Any(x => x.Contains(" C1001: ", StringComparison.Ordinal)))
+							{
+								return rerun("C1001");
+							}
+							else if (exitCode >= 9000 && exitCode < 10000)
+							{
+								return rerun("UBA error");
+							}
+							else if (exitCode != 0 && UBAConfig.bForcedRetryRemote)
+							{
+								return rerun("Force local retry");
+							}
+							additionalDescription = $"[RemoteExecutor: {executingHost}]";
+							++remoteProcessedActions;
+							break;
+						}
+
+					case ProcessExecutionType.Local:
+						{
+							if (UBAConfig.bAllowRetry && (exitCode != 0 && UBAConfig.bForcedRetry || (exitCode >= 9000 && exitCode < 10000)))
+							{
+								if (!CanRetryNatively || UBAConfig.bStoreObjFilesCompressed)
+								{
+									_threadedLogger.LogInformation("{Description} {StatusDescription}: Exited with error code {ExitCode}. This action will retry", action.CommandDescription, action.StatusDescription, exitCode);
+									++forcedRetryActions;
+									return ProcessFinishedResponse.RerunLocal;
+								}
+								else
+								{
+									_threadedLogger.LogInformation("{Description} {StatusDescription}: Exited with error code {ExitCode}. This action will retry without UBA", action.CommandDescription, action.StatusDescription, exitCode);
+									++forcedRetryActions;
+									return ProcessFinishedResponse.RerunNative;
+								}
+							}
+							++localProcessedActions;
+							break;
+						}
+
+					case ProcessExecutionType.Native:
+						{
+							// If not detoured we manually have to report created files
+							if (exitCode == 0)
+							{
+								session!.RegisterNewFiles(action.ProducedItems.Where(x => FileReference.Exists(x.Location)).Select(x => x.FullName).ToArray());
+							}
+							additionalDescription = "[NoUba]";
+							break;
+						}
+
+					case ProcessExecutionType.Cache:
+						{
+							++cacheHitActions;
+							additionalDescription = "[Cache]";
+							break;
+						}
+				}
+
+				TimeSpan processorTime = TimeSpan.Zero;
+				TimeSpan executionTime = TimeSpan.Zero;
+				long peakMemory = 0;
+				if (executionType != ProcessExecutionType.Cache)
+				{
+					processorTime = info.TotalProcessorTime;
+					executionTime = info.TotalWallTime;
+					peakMemory = info.PeakMemoryUsed;
+				}
+
+				peakProcessMemory = Math.Max(peakProcessMemory, peakMemory);
+
+				logLines.RemoveAll(line =>
+					line.StartsWith("   Creating library ", StringComparison.Ordinal) ||
+					line.StartsWith("   Creating object ", StringComparison.Ordinal) ||
+					line.EndsWith("file(s) copied.", StringComparison.Ordinal));
+
+				if (exitCode == 0)
+				{
+					if (action.bForceWarningsAsError && logLines.Any(x => x.Contains(": warning: ", StringComparison.OrdinalIgnoreCase)))
+					{
+						exitCode = 1;
+						logLines = [.. logLines.Select(x => x.Replace(": warning: ", ": error: ", StringComparison.OrdinalIgnoreCase))];
+					}
+					else
+					{
+						if (executionType != ProcessExecutionType.Cache)
+						{
+							WriteToCache(action, exitCode, info.ProcessHandle);
+						}
+						++succeededActions;
+					}
+				}
+
+				if (exitCode != 0)
+				{
+					++failedActions;
+
+					// Delete produced items on error if requested
+					if (action.bDeleteProducedItemsOnError)
+					{
+						foreach (FileItem output in action.ProducedItems.Distinct().Where(x => FileReference.Exists(x.Location)))
+						{
+							FileReference.Delete(output.Location);
+						}
+					}
+
+					if (bStopCompilationAfterErrors)
+					{
+						shouldCancel = true;
+					}
+				}
+
+				actionLogger.AddActionToLog(new(logLines, exitCode, executionTime, processorTime, peakMemory, action, additionalDescription));
+
+				return ProcessFinishedResponse.None;
+			});
+
+			scheduler.Start();
+
+			ConsoleCancelEventHandler? cancelHandler = null;
+			cancelHandler = (object? sender, ConsoleCancelEventArgs e) =>
+			{
+				Console.CancelKeyPress -= cancelHandler;
+				cancelHandler = null;
+				e.Cancel = true;
+				cancelBuild();
+			};
+			Console.CancelKeyPress += cancelHandler;
+
+			int index = 0;
+			foreach (LinkedAction action in inputActions)
+			{
+				action.SortIndex = index++;
+				ProcessStartInfo startInfo = GetActionStartInfo(action);
+				startInfo.RootsHandle = GetActionRootsHandle(action);
+
+				var prereqActionsSortIndex = action.PrerequisiteActions.Select(a => a.SortIndex).ToArray();
+				bool enableDetour = !ForceLocalNoDetour(action) && action.bCanExecuteInUBA;
+				bool canRunRemotely = CanRunRemotely(action);
+
+				var (knownInputs, knownInputsCount) = BuildKnownInputs(action);
+
+				uint bucket = GetCacheBucket(action);
+				uint memoryGroup = GetMemoryGroup(action);
+				ulong predictedMemoryUsage = 0; // uba would do a better job scheduling if we knew approx memory usage
+				scheduler.EnqueueProcess(startInfo, action.Weight, enableDetour, canRunRemotely, prereqActionsSortIndex, knownInputs, knownInputsCount, bucket, memoryGroup, predictedMemoryUsage, action);
+
+				++totalActions;
+				cacheTotalActions += bucket != 0 ? 0 : 1;
+			}
+
+			if (!UBAConfig.bForceBuildAllRemote)
+			{
+				scheduler.SetAllowDisableRemoteExecution();
+			}
+
+			_threadedLogger.LogDebug("All processes queued");
 
 			try
 			{
+				AgentCoordinatorScheduler coordinatorScheduler = new(scheduler, server);
 				uint statusUpdateCounter = 10;
 				foreach (IUBAAgentCoordinator coordinator in _agentCoordinators)
 				{
 					uint statusUpdateIndex = statusUpdateCounter;
-					coordinator.Start(queue, CanRunRemotely, (sr, sc, st, t, sl) => UpdateStatus(statusUpdateIndex + sr, sc, st, t, sl));
+					coordinator.Start(coordinatorScheduler, CanRunRemotely, (sr, sc, st, t, sl) => UpdateStatus(statusUpdateIndex + sr, sc, st, t, sl));
 					statusUpdateCounter += 10;
 				}
 
-				bool res = queue.RunTillDone().Result; // Using inline wait to avoid possible thread switch
+				while (!scheduler.IsEmpty)
+				{
+					if (shouldCancel)
+					{
+						cancelBuild();
+					}
+					Thread.Sleep(100);
+				}
 
-				queue.GetActionResultCounts(out int totalActions, out int succeededActions, out int failedActions, out int cacheHitActions, out int cacheMissActions);
-				telemetryEvent = new TelemetryExecutorUBAEvent(Name, _ubaStartTimeUtc, res, totalActions, succeededActions, failedActions, cacheHitActions, cacheMissActions,
-					_localProcessedActions, _remoteProcessedActions,
-					_localRetryActions.Count, _forcedRetryActions.Count,
-					!UBAConfig.bDisableRemote ? _agentCoordinators.Count : 0, !UBAConfig.bDisableRemote ? _successfulCoordinatorConnections : 0, !UBAConfig.bDisableRemote ? _failedCoordinatorConnections : 0,
-					!UBAConfig.bDisableRemote ? _ubaDurationWaitingForRemote : TimeSpan.Zero,
-					!UBAConfig.bDisableRemote || _agentCoordinators.Count == 0 ? "Local" : _remoteConnectionMode,
-					DateTime.UtcNow);
+				bool res = failedActions == 0;
 
+				actionLogger.TraceSummary(res);
+
+				coordinatorScheduler.Reset();
+
+				int cacheMissActions = cacheTotalActions - cacheHitActions;
+
+				if (!_bIsCancelled)
+				{
+					telemetryEvent = new TelemetryExecutorUBAEvent(Name, _ubaStartTimeUtc, res, totalActions, succeededActions, failedActions, cacheHitActions, cacheMissActions,
+						localProcessedActions, remoteProcessedActions,
+						localRetryActions, forcedRetryActions,
+						!UBAConfig.bDisableRemote ? _agentCoordinators.Count : 0, !UBAConfig.bDisableRemote ? _successfulCoordinatorConnections : 0, !UBAConfig.bDisableRemote ? _failedCoordinatorConnections : 0,
+						!UBAConfig.bDisableRemote ? _ubaDurationWaitingForRemote : TimeSpan.Zero,
+						!UBAConfig.bDisableRemote || _agentCoordinators.Count == 0 ? "Local" : _remoteConnectionMode,
+						DateTime.UtcNow,
+						peakProcessMemory, peakTotalMemory);
+				}
 				return res;
 			}
 			finally
 			{
-				if (_bIsRemoteActionsAllowed)
+				if (cancelHandler != null)
 				{
-					_agentCoordinators.ForEach(ac => ac.Stop());
+					Console.CancelKeyPress -= cancelHandler;
+					cancelHandler = null;
 				}
+
+				_agentCoordinators.ForEach(ac => ac.Stop());
 			}
 		}
 
@@ -750,8 +967,6 @@ namespace UnrealBuildTool
 			action.bCanExecuteInUBA &&
 			action.bCanExecuteRemotely &&
 			(UBAConfig.bLinkRemote || action.ActionType != ActionType.Link) &&
-			!_localRetryActions.ContainsKey(action) &&
-			!_forcedRetryActions.ContainsKey(action) &&
 			!ForceLocalNoDetour(action);
 
 		ProcessStartInfo GetActionStartInfo(LinkedAction action)
@@ -770,39 +985,19 @@ namespace UnrealBuildTool
 				}
 			}
 				
-			string application = action.CommandPath.FullName;
-			string arguments = action.CommandArguments;
-			if (ShouldRunNintendoToolViaShell(action.CommandPath))
-			{
-				application = BuildHostPlatform.Current.Shell.FullName;
-				arguments = $"/c set \"DOTNET_ROOT=\" && set \"DOTNET_HOST_PATH=\" && set \"DOTNET_MULTILEVEL_LOOKUP=1\" && set \"DOTNET_ROLL_FORWARD=LatestMajor\" && \"{action.CommandPath.FullName}\" {action.CommandArguments}";
-			}
-
 			ProcessStartInfo startInfo = new()
 			{
-				Application = application,
+				Application = action.CommandPath.FullName,
 				WorkingDirectory = action.WorkingDirectory.FullName,
-				Arguments = arguments,
+				Arguments = action.CommandArguments,
 				Priority = priority,
 				UserData = action,
 				Description = description,
-				Configuration = action.bIsGCCCompiler ? EpicGames.UBA.ProcessStartInfo.CommonProcessConfigs.CompileClang : EpicGames.UBA.ProcessStartInfo.CommonProcessConfigs.CompileMsvc,
+				Configuration = action.bIsClangCompiler ? EpicGames.UBA.ProcessStartInfo.CommonProcessConfigs.CompileClang : EpicGames.UBA.ProcessStartInfo.CommonProcessConfigs.CompileMsvc,
 				LogFile = UBAConfig.bLogEnabled ? (action.Inner.ProducedItems.First().Location.GetFileName() + ".log") : null,
 			};
 
 			return startInfo;
-		}
-
-		static bool ShouldRunNintendoToolViaShell(FileReference commandPath)
-		{
-			string fileName = commandPath.GetFileName();
-			if (!fileName.Equals("MakeMeta.exe", StringComparison.OrdinalIgnoreCase)
-				&& !fileName.Equals("MakeNso.exe", StringComparison.OrdinalIgnoreCase))
-			{
-				return false;
-			}
-
-			return commandPath.FullName.Contains("\\NintendoSDK\\Tools\\CommandLineTools\\", StringComparison.OrdinalIgnoreCase);
 		}
 
 		void DecrementCacheableAction()
@@ -836,6 +1031,16 @@ namespace UnrealBuildTool
 
 		uint GetCacheBucket(LinkedAction action)
 		{
+			if (!action.ArtifactMode.HasFlag(ArtifactMode.Enabled))
+			{
+				return 0;
+			}
+
+			if (!UBAConfig.bCacheLinkActions && action.ActionType == ActionType.Link)
+			{
+				return 0;
+			}
+
 			uint bucket = 0;
 			if (action.CacheBucket != 0)
 			{
@@ -878,6 +1083,34 @@ namespace UnrealBuildTool
 			return bucket;
 		}
 
+		uint GetStringHash(string str, uint hash = 5381)
+		{
+			for (int idx = 0; idx < str.Length; idx++)
+			{
+				hash += (hash << 5) + str[idx];
+			}
+			return hash;
+		}
+
+		uint GetMemoryGroup(LinkedAction action)
+		{
+			if (action.ActionType != ActionType.Compile)
+				return 0;
+
+			FileItem? pch = action.ProducedItems.FirstOrDefault(i => i.HasExtension(".pch"));
+
+			if (pch == null)
+			{
+				pch = action.Inner.PrerequisiteItems.FirstOrDefault(i => i.HasExtension(".pch"));
+			}
+
+			if (pch != null)
+			{
+				return GetStringHash(pch.FullName);
+			}
+			return 1;
+		}
+
 		ulong GetActionRootsHandle(LinkedAction action)
 		{
 			using MemoryStream outputsMemory = new(1024);
@@ -913,15 +1146,20 @@ namespace UnrealBuildTool
 			public DepsData? Data { get; init; }
 		}
 
-		bool WriteToCache(LinkedAction action, IProcess process)
+		bool WriteToCache(LinkedAction action, int exitCode, nint processHandle)
 		{
-			if (process.ExitCode != 0 || !action.ArtifactMode.HasFlag(ArtifactMode.Enabled) || !_cacheClients.Any(x => x.Key.CanWrite))
+			if (exitCode != 0 || !action.ArtifactMode.HasFlag(ArtifactMode.Enabled) || !_cacheClients.Any(x => x.Key.CanWrite))
 			{
 				return true;
 			}
 
 			// If there are no outputs there is nothing to cache
 			if (!action.ProducedItems.Any())
+			{
+				return true;
+			}
+
+			if (!UBAConfig.bCacheLinkActions && action.ActionType == ActionType.Link)
 			{
 				return true;
 			}
@@ -983,290 +1221,12 @@ namespace UnrealBuildTool
 					continue;
 				}
 
-				success = item.Value.WriteToCache(bucket, process, inputsMemory.GetBuffer(), (uint)inputsMemory.Position, outputsMemory.GetBuffer(), (uint)outputsMemory.Position) || success;
+				success = item.Value.WriteToCache(bucket, processHandle, inputsMemory.GetBuffer(), (uint)inputsMemory.Position, outputsMemory.GetBuffer(), (uint)outputsMemory.Position) || success;
 			}
 
 			DecrementCacheableAction();
 
 			return success;
-		}
-
-		Func<Task>? RunActionLocal(ImmediateActionQueue queue, LinkedAction action)
-		{
-			if (UBAConfig.bForceBuildAllRemote && CanRunRemotely(action))
-			{
-				return null;
-			}
-
-			return () =>
-			{
-				if (_bIsCancelled)
-				{
-					HandleActionCancelled(queue, null, action);
-					return Task.CompletedTask;
-				}
-				bool enableDetour = !ForceLocalNoDetour(action) && action.bCanExecuteInUBA && !_forcedRetryActions.ContainsKey(action);
-
-				ProcessStartInfo startInfo = GetActionStartInfo(action);
-				startInfo.RootsHandle = GetActionRootsHandle(action);
-
-				using (IProcess process = _session!.RunProcess(startInfo, false, null, enableDetour))
-				{
-					Interlocked.Add(ref _localProcessedActions, 1);
-					if (!_bIsCancelled && (UBAConfig.bAllowRetry && (process.ExitCode != 0 && UBAConfig.bForcedRetry || (process.ExitCode >= 9000 && process.ExitCode < 10000))))
-					{
-						if (UBAConfig.bStoreObjFilesCompressed)
-						{
-							_threadedLogger.LogInformation("{Description} {StatusDescription}: Exited with error code {ExitCode}. This action will retry", action.CommandDescription, action.StatusDescription, process.ExitCode);
-						}
-						else
-						{
-							_threadedLogger.LogInformation("{Description} {StatusDescription}: Exited with error code {ExitCode}. This action will retry without UBA", action.CommandDescription, action.StatusDescription, process.ExitCode);
-							_forcedRetryActions.AddOrUpdate(action, false, (k, v) => false);
-						}
-						queue.RequeueAction(action);
-						return Task.CompletedTask;
-					}
-
-					// If not detoured we manually have to report created files
-					if (!enableDetour && process.ExitCode == 0)
-					{
-						_session!.RegisterNewFiles(action.ProducedItems.Where(x => FileReference.Exists(x.Location)).Select(x => x.FullName).ToArray());
-					}
-
-					if (enableDetour)
-					{
-						WriteToCache(action, process);
-					}
-
-					TimeSpan processorTime = process.TotalProcessorTime;
-					TimeSpan executionTime = process.TotalWallTime;
-					List<string> logLines = process.LogLines;
-					RemoveLogLineSpam(logLines);
-					string? additionalDescription = !enableDetour ? "(UBA disabled)" : null;
-					ActionFinished(queue, new ExecuteResults(logLines, process.ExitCode, executionTime, processorTime, additionalDescription), action, process);
-				}
-				return Task.CompletedTask;
-			};
-		}
-
-		Func<Task>? RunActionRemote(ImmediateActionQueue queue, LinkedAction action, bool isCrossArchitecture)
-		{
-			if (!CanRunRemotely(action))
-			{
-				return null;
-			}
-
-			if (isCrossArchitecture && !action.bCanExecuteInUBACrossArchitecture)
-			{
-				return null;
-			}
-
-			return () =>
-			{
-				if (_ubaDurationWaitingForRemote == TimeSpan.Zero)
-				{
-					_ubaDurationWaitingForRemote = DateTime.UtcNow - _ubaStartTimeUtc;
-				}
-				if (_bIsCancelled)
-				{
-					HandleActionCancelled(queue, null, action);
-					return Task.CompletedTask;
-				}
-
-				uint knownInputsCount = 0;
-				byte[]? knownInputs = null;
-				if (UBAConfig.bUseKnownInputs)
-				{
-					int sizeOfChar = System.OperatingSystem.IsWindows() ? 2 : 1;
-
-					int byteCount = 0;
-					foreach (FileItem item in action.PrerequisiteItems)
-					{
-						byteCount += (item.FullName.Length + 1) * sizeOfChar;
-						++knownInputsCount;
-					}
-
-					knownInputs = new byte[byteCount + sizeOfChar];
-
-					int byteOffset = 0;
-					foreach (FileItem item in action.PrerequisiteItems)
-					{
-						string str = item.FullName;
-						int strBytes = str.Length * sizeOfChar;
-						if (sizeOfChar == 1) // Unmanaged size uses ascii
-						{
-							System.Buffer.BlockCopy(System.Text.Encoding.ASCII.GetBytes(str.ToCharArray()), 0, knownInputs, byteOffset, strBytes);
-						}
-						else
-						{
-							System.Buffer.BlockCopy(str.ToCharArray(), 0, knownInputs, byteOffset, strBytes);
-						}
-
-						byteOffset += strBytes + sizeOfChar;
-					}
-				}
-
-				ProcessStartInfo startInfo = GetActionStartInfo(action);
-				startInfo.RootsHandle = GetActionRootsHandle(action);
-
-				_session!.RunProcessRemote(startInfo, (s, e) =>
-				{
-					if (e.ExitCode == 99999) // Process was cancelled by executor
-					{
-						return;
-					}
-
-					Interlocked.Add(ref _remoteProcessedActions, 1);
-					if (e.ExitCode != 0 && !e.LogLines.Any())
-					{
-						RemoteActionFailedNoOutput(queue, action, e.ExitCode, e.ExecutingHost ?? "Unknown");
-						return;
-					}
-					else if ((uint)e.ExitCode == 0xC0000005)
-					{
-						RemoteActionFailedCrash(queue, action, e.ExitCode, e.ExecutingHost ?? "Unknown", "Access violation", e.LogLines);
-						return;
-					}
-					else if ((uint)e.ExitCode == 0xC0000409)
-					{
-						RemoteActionFailedCrash(queue, action, e.ExitCode, e.ExecutingHost ?? "Unknown", "Stack buffer overflow", e.LogLines);
-						return;
-					}
-					else if ((uint)e.ExitCode == 0xC0000602)
-					{
-						RemoteActionFailedCrash(queue, action, e.ExitCode, e.ExecutingHost ?? "Unknown", "Fail Fast Exception", e.LogLines);
-						return;
-					}
-					else if (e.ExitCode != 0 && e.LogLines.Any(x => x.Contains(" C1001: ", StringComparison.Ordinal)))
-					{
-						RemoteActionFailedCrash(queue, action, e.ExitCode, e.ExecutingHost ?? "Unknown", "C1001", e.LogLines);
-						return;
-					}
-					else if (e.ExitCode >= 9000 && e.ExitCode < 10000)
-					{
-						RemoteActionFailedCrash(queue, action, e.ExitCode, e.ExecutingHost ?? "Unknown", "UBA error", e.LogLines);
-						return;
-					}
-					else if (e.ExitCode != 0 && UBAConfig.bForcedRetryRemote)
-					{
-						RemoteActionFailedCrash(queue, action, e.ExitCode, e.ExecutingHost ?? "Unknown", "Force local retry", e.LogLines);
-						return;
-					}
-
-					IProcess process = (IProcess)s;
-
-					WriteToCache(action, process);
-
-					string additionalDescription = $"[RemoteExecutor: {e.ExecutingHost}]";
-					TimeSpan processorTime = e.TotalProcessorTime;
-					TimeSpan executionTime = e.TotalWallTime;
-					List<string> logLines = e.LogLines;
-					RemoveLogLineSpam(logLines);
-					ActionFinished(queue, new ExecuteResults(logLines, e.ExitCode, executionTime, processorTime, additionalDescription), action, process);
-				}, action.Weight, knownInputs, knownInputsCount, action.bCanExecuteInUBACrossArchitecture);
-				return Task.CompletedTask;
-			};
-		}
-
-		uint ActionsLeftThatCanRunRemotely(ImmediateActionQueue queue)
-		{
-			lock (_actionsChangedLock)
-			{
-				if (_bActionsChanged)
-				{
-					_actionsQueuedThatCanRunRemotely = queue.GetQueuedActionsCount(CanRunRemotely);
-					_bActionsChanged = false;
-				}
-				return _actionsQueuedThatCanRunRemotely;
-			}
-		}
-
-		protected void HandleActionCancelled(ImmediateActionQueue queue, ExecuteResults? results, LinkedAction action)
-		{
-			ExecuteResults cancelResults = new(results?.LogLines ?? new(), Int32.MaxValue, results?.ExecutionTime ?? TimeSpan.Zero, results?.ProcessorTime ?? TimeSpan.Zero, results?.AdditionalDescription);
-			queue.OnActionCompleted(action, false, cancelResults);
-		}
-
-		protected void ActionFinished(ImmediateActionQueue queue, ExecuteResults results, LinkedAction action, IProcess? process = null)
-		{
-			if (_bIsCancelled)
-			{
-				HandleActionCancelled(queue, results, action);
-				return;
-			}
-
-			bool success = results.ExitCode == 0;
-
-			if (results.ExitCode == 0 && action.bForceWarningsAsError && results.LogLines.Any(x => x.Contains("): warning: ")))
-			{
-				results = new(results.LogLines.Select(x => x.Replace("): warning: ", "): error: ", StringComparison.OrdinalIgnoreCase)).ToList(), 1, results.ExecutionTime, results.ProcessorTime, results.AdditionalDescription);
-				success = false;
-			}
-
-			queue.OnActionCompleted(action, success, results);
-
-			if (!success)
-			{
-				++_errorCount;
-			}
-			UpdateProgress(queue);
-
-			lock (_actionsChangedLock)
-			{
-				_bActionsChanged = true;
-			}
-		}
-		void UpdateProgress(ImmediateActionQueue queue)
-		{
-			int completedActions = queue.CompletedActions;
-			int totalActions = queue.TotalActions;
-			int percent = completedActions * 100 / totalActions;
-			_session!.UpdateProgress((uint)totalActions, (uint)completedActions, _errorCount);
-		}
-		void UpdateCacheProgress(ImmediateActionQueue queue)
-		{
-			_session!.UpdateStatus(1, 6, $"Hits {queue.CacheHitActions} Misses {queue.CacheMissActions}", LogEntryType.Info);
-		}
-		void RemoteActionFailedNoOutput(ImmediateActionQueue queue, LinkedAction action, int exitCode, string executingHost)
-		{
-			if (_bIsCancelled)
-			{
-				HandleActionCancelled(queue, null, action);
-				return;
-			}
-
-			_threadedLogger.LogInformation("{Description} {StatusDescription} [RemoteExecutor: {ExecutingHost}]: Exited with error code {ExitCode} with no output. This action will retry locally", action.CommandDescription, action.StatusDescription, executingHost, exitCode);
-			_localRetryActions.AddOrUpdate(action, false, (k, v) => false);
-			queue.RequeueAction(action);
-
-			lock (_actionsChangedLock)
-			{
-				_bActionsChanged = true;
-			}
-		}
-
-		void RemoteActionFailedCrash(ImmediateActionQueue queue, LinkedAction action, int exitCode, string executingHost, string error, List<string> logLines)
-		{
-			if (_bIsCancelled)
-			{
-				HandleActionCancelled(queue, null, action);
-				return;
-			}
-
-			_threadedLogger.LogInformation("{Description} {StatusDescription} [RemoteExecutor: {ExecutingHost}]: Exited with error code {ExitCode} ({Error}). This action will retry locally", action.CommandDescription, action.StatusDescription, executingHost, exitCode, error);
-			foreach (string line in logLines)
-			{
-				_threadedLogger.LogInformation(line);
-			}
-
-			_localRetryActions.AddOrUpdate(action, false, (k, v) => false);
-			queue.RequeueAction(action);
-
-			lock (_actionsChangedLock)
-			{
-				_bActionsChanged = true;
-			}
 		}
 	}
 }

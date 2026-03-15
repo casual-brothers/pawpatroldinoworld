@@ -503,11 +503,17 @@ namespace AutomationTool
 		public void WaitForExit()
 		{
 			bool bProcTerminated = false;
-			// Make sure the process objeect is valid.
+			// Make sure the process object is valid.
 			lock (ProcSyncObject)
 			{
 				bProcTerminated = (Proc == null) || Proc.HasExited;
 			}
+
+			if (bProcTerminated)
+			{
+				Proc?.WaitForExit();
+			}
+
 			// Keep checking if we got all output messages until the process terminates.
 			Stopwatch Watch = Stopwatch.StartNew();
 			int MaxWaitUntilMessagesReceived = 60 * 1000;
@@ -535,6 +541,12 @@ namespace AutomationTool
 				{
 					bProcTerminated = (Proc == null) || Proc.HasExited;
 				}
+
+				if (bProcTerminated)
+				{
+					Proc?.WaitForExit(30000);
+				}
+
 				if (!bProcTerminated)
 				{
 					// Timeout starts when process has terminated
@@ -549,25 +561,46 @@ namespace AutomationTool
 					}
 				}
 			}
+
+			int waitTimeBeforeExit = Timeout.Infinite;
+
 			if (!(bStdOutSignalReceived && bStdErrSignalReceived))
 			{
-				Logger.LogInformation("Waited for {0:n2}s for output of {AppName}, some output may be missing; we gave up.", Watch.Elapsed.TotalSeconds, AppName);
+				Logger.LogInformation("Waited for {Seconds:n2}s for output of {AppName}, some output may be missing; we gave up. Now waiting 5 minutes for process to exit.", Watch.Elapsed.TotalSeconds, AppName);
+				waitTimeBeforeExit = 300000;
 			}
 
-			// Double-check if the process terminated
+			bool exited = true;
+
+			if (Proc != null)
+			{
+				// wait until the process terminates or we hit our timeout
+				exited = Proc.WaitForExit(waitTimeBeforeExit);
+			}
+
 			lock (ProcSyncObject)
 			{
-				bProcTerminated = (Proc == null) || Proc.HasExited;
-
-				if (Proc != null)
+				// if we exited return the exit code
+				if (exited)
 				{
-					if (!bProcTerminated)
+					if (Proc != null)
 					{
-						// The process did not terminate yet but we've read all output messages, wait until the process terminates
-						Proc.WaitForExit();
+						ExitCode = Proc.ExitCode;
 					}
+				}
+				else
+				{
+					// if we failed to exit log a systemic warning and kill the process
+					Logger.LogWarning(KnownLogEvents.Systemic, "Failed to exit process {AppName}.", AppName);
 
-					ExitCode = Proc.ExitCode;
+					try
+					{
+						Proc?.Kill();
+					}
+					catch
+					{ 
+					
+					}
 				}
 			}
 		}
@@ -722,6 +755,7 @@ namespace AutomationTool
 					}
 					else
 					{
+						ProcToKill.WaitForExit();
 						ExitCode = ProcToKill.ExitCode;
 						Logger.LogDebug("Process {ProcToKillName} successfully exited.", ProcToKillName);
 						OnProcessExited();
@@ -958,7 +992,6 @@ namespace AutomationTool
 				// on applications that may not be compatible with it e.g. requiring a newer version that may be
 				// installed on the system as part of their installer.
 				FinalEnv["DOTNET_ROOT"] = "";
-				FinalEnv["DOTNET_HOST_PATH"] = "";
 				FinalEnv["DOTNET_MULTILEVEL_LOOKUP"] = "";
 				FinalEnv["DOTNET_ROLL_FORWARD"] = "";
 

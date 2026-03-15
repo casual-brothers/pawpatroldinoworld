@@ -57,31 +57,31 @@ namespace UnrealBuildTool
 		/// When enabled, will stop compiling targets after a compile error occurs.
 		/// </summary>
 		[XmlConfigFile]
-		private static bool bStopCompilationAfterErrors = false;
+		protected static bool bStopCompilationAfterErrors = false;
 
 		/// <summary>
 		/// Whether to show compilation times along with worst offenders or not.
 		/// </summary>
 		[XmlConfigFile]
-		private static bool bShowCompilationTimes = Unreal.IsBuildMachine();
+		protected static bool bShowCompilationTimes = Unreal.IsBuildMachine();
 
 		/// <summary>
 		/// Whether to show compilation times for each executed action
 		/// </summary>
 		[XmlConfigFile]
-		private static bool bShowPerActionCompilationTimes = Unreal.IsBuildMachine();
+		protected static bool bShowPerActionCompilationTimes = Unreal.IsBuildMachine();
 
 		/// <summary>
 		/// Whether to log command lines for actions being executed
 		/// </summary>
 		[XmlConfigFile]
-		private static bool bLogActionCommandLines = false;
+		protected static bool bLogActionCommandLines = false;
 
 		/// <summary>
 		/// Add target names for each action executed
 		/// </summary>
 		[XmlConfigFile]
-		private static bool bPrintActionTargetNames = false;
+		protected static bool bPrintActionTargetNames = false;
 
 		/// <summary>
 		/// Whether to take into account the Action's weight when determining to do more work or not.
@@ -98,7 +98,7 @@ namespace UnrealBuildTool
 		/// <summary>
 		/// Collapse non-error output lines
 		/// </summary>
-		private bool bCompactOutput = false;
+		protected bool bCompactOutput = false;
 
 		/// <summary>
 		/// How many processes that will be executed in parallel
@@ -203,7 +203,7 @@ namespace UnrealBuildTool
 				result = await queue.RunTillDone();
 
 				queue.GetActionResultCounts(out int totalActions, out int succeededActions, out int failedActions, out int cacheHitActions, out int cacheMissActions);
-				telemetryEvent = new TelemetryExecutorEvent(Name, startTimeUTC, result, totalActions, succeededActions, failedActions, cacheHitActions, cacheMissActions, DateTime.UtcNow);
+				telemetryEvent = new TelemetryExecutorEvent(Name, startTimeUTC, result, totalActions, succeededActions, failedActions, cacheHitActions, cacheMissActions, DateTime.UtcNow, queue.ProcessGroup.PeakProcessMemoryUsed, queue.ProcessGroup.PeakJobMemoryUsed);
 			}
 			else
 			{
@@ -216,7 +216,7 @@ namespace UnrealBuildTool
 				result = await queue.RunTillDone();
 
 				queue.GetActionResultCounts(out int totalActions, out int succeededActions, out int failedActions, out int cacheHitActions, out int cacheMissActions);
-				telemetryEvent = new TelemetryExecutorEvent(Name, startTimeUTC, result, totalActions, succeededActions, failedActions, cacheHitActions, cacheMissActions, DateTime.UtcNow);
+				telemetryEvent = new TelemetryExecutorEvent(Name, startTimeUTC, result, totalActions, succeededActions, failedActions, cacheHitActions, cacheMissActions, DateTime.UtcNow, queue.ProcessGroup.PeakProcessMemoryUsed, queue.ProcessGroup.PeakJobMemoryUsed);
 			}
 
 			return result;
@@ -235,21 +235,7 @@ namespace UnrealBuildTool
 		{
 			CancellationToken.ThrowIfCancellationRequested();
 
-			string fileName = Action.CommandPath.GetFileName();
-			string commandPath = Action.CommandPath.FullName;
-			string commandArguments = Action.CommandArguments;
-			Dictionary<string, string>? environment = null;
-			if ((fileName.Equals("MakeMeta.exe", StringComparison.OrdinalIgnoreCase) || fileName.Equals("MakeNso.exe", StringComparison.OrdinalIgnoreCase))
-				&& commandPath.Contains("\\NintendoSDK\\Tools\\CommandLineTools\\", StringComparison.OrdinalIgnoreCase))
-			{
-				environment = ManagedProcess.GetCurrentEnvVars();
-				environment.Remove("DOTNET_ROOT");
-				environment.Remove("DOTNET_HOST_PATH");
-				environment["DOTNET_MULTILEVEL_LOOKUP"] = "1";
-				environment["DOTNET_ROLL_FORWARD"] = "LatestMajor";
-			}
-
-			using ManagedProcess Process = new ManagedProcess(ProcessGroup, commandPath, commandArguments, Action.WorkingDirectory.FullName, environment, null, ProcessPriority);
+			using ManagedProcess Process = new ManagedProcess(ProcessGroup, Action.CommandPath.FullName, Action.CommandArguments, Action.WorkingDirectory.FullName, null, null, ProcessPriority);
 
 			using MemoryStream StdOutStream = new MemoryStream();
 			await Process.CopyToAsync(StdOutStream, CancellationToken);
@@ -258,18 +244,19 @@ namespace UnrealBuildTool
 
 			await Process.WaitForExitAsync(CancellationToken);
 
-			List<string> LogLines = Console.OutputEncoding.GetString(StdOutStream.GetBuffer(), 0, Convert.ToInt32(StdOutStream.Length)).Split(LineEndingSplit, StringSplitOptions.RemoveEmptyEntries).ToList();
+			List<string> LogLines = [.. Console.OutputEncoding.GetString(StdOutStream.GetBuffer(), 0, Convert.ToInt32(StdOutStream.Length)).Split(LineEndingSplit, StringSplitOptions.RemoveEmptyEntries)];
 			int ExitCode = Process.ExitCode;
 			TimeSpan ProcessorTime = Process.TotalProcessorTime;
 			TimeSpan ExecutionTime = Process.ExitTime - Process.StartTime;
+			long PeakMemoryUsed = Process.PeakMemoryUsed;
 
-			if (ExitCode == 0 && Action.bForceWarningsAsError && LogLines.Any(x => x.Contains("): warning: ", StringComparison.OrdinalIgnoreCase)))
+			if (ExitCode == 0 && Action.bForceWarningsAsError && LogLines.Any(x => x.Contains(": warning: ", StringComparison.OrdinalIgnoreCase)))
 			{
 				ExitCode = 1;
-				LogLines = LogLines.Select(x => x.Replace("): warning: ", "): error: ", StringComparison.OrdinalIgnoreCase)).ToList();
+				LogLines = [.. LogLines.Select(x => x.Replace(": warning: ", ": error: ", StringComparison.OrdinalIgnoreCase))];
 			}
 
-			return new ExecuteResults(LogLines, ExitCode, ExecutionTime, ProcessorTime, AdditionalDescription);
+			return new ExecuteResults(LogLines, ExitCode, ExecutionTime, ProcessorTime, PeakMemoryUsed, Action, AdditionalDescription);
 		}
 	}
 

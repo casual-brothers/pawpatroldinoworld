@@ -1,28 +1,27 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+using AutomationTool;
+using EpicGames.Core;
+using Gauntlet;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using NintendoPackagingHelpers;
+using NintendoTm;
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.IO;
 using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Globalization;
 using System.Xml.Linq;
 using System.Xml.XPath;
-
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using NintendoTm;
-using Microsoft.Extensions.Logging;
-
-using EpicGames.Core;
-using AutomationTool;
-using UnrealBuildTool;
 using UnrealBuildBase;
-using Gauntlet;
+using UnrealBuildTool;
 
 public abstract class NintendoPlatform : AutomationTool.Platform
 {
@@ -38,6 +37,8 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 
 	public string RuntimeSettingsName => $"/Script/{TargetPlatformType}RuntimeSettings.{TargetPlatformType}RuntimeSettings";
 	public string EditorSettingsName => $"/Script/{TargetPlatformType}PlatformEditor.{TargetPlatformType}TargetSettings";
+
+	protected abstract bool IsDeviceTypeValidForPlatform(string DeviceType);
 
 	static public string GetPlatformIdentifierFromTargetPlatform(UnrealTargetPlatform TargetPlatform)
 	{ 
@@ -71,7 +72,6 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 	}
 
 	protected abstract UnrealTargetPlatform TargetPlatform { get; }
-	protected abstract bool IsDeviceTypeValidForPlatform(string DeviceType);
 	
 	protected abstract string NintendoSDKPlatformIdentifier { get; }
 	protected abstract string AuthoringToolPlatformArg { get; }
@@ -125,6 +125,13 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 			// This is an arbitrary directory name.  It needs to contain all the .nrs files associated with .nro files
 			// It will be filtered from creatensp but the files will be referenced using --nrs on platforms that need it
 			String Filename = Path.Combine("nrs", Path.GetFileName(Dest.Name));
+			return new StagedFileReference(Filename);
+		}
+
+		if (Dest.Name.EndsWith(".modules"))
+		{
+			// We want to move the modules file to the root NRO directory, because that's the modules directory
+			String Filename = Path.Combine("nro", Path.GetFileName(Dest.Name));
 			return new StagedFileReference(Filename);
 		}
 
@@ -375,7 +382,7 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 		return OptionValue;
 	}
 
-	static public bool GetOptionValue(string OptionsString, string OptionName, ref string OptionValue)
+	static public string GetOptionValue(string OptionsString, string OptionName)
 	{
 		string OptionDesignator = OptionName + "=";
 
@@ -384,12 +391,17 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 		{
 			if (Option.StartsWith(OptionDesignator, StringComparison.InvariantCultureIgnoreCase))
 			{
-				OptionValue = Option.Remove(0, OptionDesignator.Length).Trim().TrimStart('\"').TrimEnd('\"').Trim();
-				return true;
+				return Option.Remove(0, OptionDesignator.Length).Trim().TrimStart('\"').TrimEnd('\"').Trim();
 			}
 		}
 
-		return false;
+		return "";
+	}
+	static public bool GetOptionValue(string OptionsString, string OptionName, ref string OptionValue)
+	{
+		OptionValue = GetOptionValue(OptionsString, OptionName);
+
+		return !string.IsNullOrEmpty(OptionValue);
 	}
 
 	static private bool HasOption(string Options, string NeededOption)
@@ -727,13 +739,21 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 		string ApplicationVersionString = null;
 		string ApplicationVersion = null;
 		string RuntimeAddOnContentInstall = null;
+		string AddOnContentVersion = null;
 		Ini.GetString(RuntimeSettingsName, "ProgramId", out ProgramId);
 		Ini.GetString(RuntimeSettingsName, "ApplicationVersionString", out ApplicationVersionString);
 		Ini.GetString(RuntimeSettingsName, "ApplicationVersion", out ApplicationVersion);
 		Ini.GetString(RuntimeSettingsName, "RuntimeAddOnContentInstall", out RuntimeAddOnContentInstall);
+		Ini.GetString(RuntimeSettingsName, "AddOnContentVersion", out AddOnContentVersion);
 		if (string.IsNullOrEmpty(ProgramId))
 		{
 			throw new AutomationException("Unable to find ProgramId .ini setting");
+		}
+
+		// Set the AddOnContentVersion to the ApplicationVersion if AddOnContentVersion is not specified.
+		if(string.IsNullOrEmpty(AddOnContentVersion))
+		{
+			AddOnContentVersion = ApplicationVersion;
 		}
 
 		// place an empty, magic file in the data directory to let the packaged game know this is a fully packaged rom image
@@ -836,7 +856,7 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 			string BaseNspName = GetNspName(Params, SC, SC.StageTargetConfigurations[TargetConfigurationIdx]);
 			string OutputNsp = Path.Combine(GetPackageOutputDirectory(Params, SC), BaseNspName);
 
-			int SuggestedApplicationVersion = !string.IsNullOrEmpty(LatestPatchNsp) ? GetReleaseVersion(LatestPatchNsp) + 1 : -1;
+			int SuggestedApplicationVersion = !string.IsNullOrEmpty(LatestPatchNsp) ? GetNextReleaseVersion(LatestPatchNsp) : -1;
 			string MetaFile = NintendoExports.GenerateMetaFile(TargetPlatformType, Params.RawProjectPath, SC.StageTargetConfigurations[TargetConfigurationIdx], false, SuggestedApplicationVersion);
 
 			if (Params.ApplyIoStoreOnDemand)
@@ -844,13 +864,22 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 				ApplyIoStoreOnDemandSettings(Params, MetaFile, SC.StageDirectory.ToString());
 			}
 
-			bSucceeded &= CreateNSP(SC, Params, TargetConfigurationIdx, ProgramId, MetaFile, DescFile, OutputNsp, Params.HasDLCName, bRuntimeAddOnContentInstall, ApplicationVersion, AddOnContentChunks, InitialChunkFilterRules);
+			// Capture this as we now need to wait until we rename the package during the merge packages step if we're doing it.
+			bool bCreateNSPSucceeded = CreateNSP(SC, Params, TargetConfigurationIdx, ProgramId, MetaFile, DescFile, OutputNsp, Params.HasDLCName, bRuntimeAddOnContentInstall, ApplicationVersion, AddOnContentChunks, InitialChunkFilterRules);
+			bSucceeded &= bCreateNSPSucceeded;
 
 			if (AddOnContentChunks.Count > 0)
 			{
 				// Create the chunk based AddOnContent NSP at the same time as the main NSP
 				string AOCOutputNsp = Path.Combine(GetPackageOutputDirectory(Params, SC), GetNspName(Params, SC, SC.StageTargetConfigurations[TargetConfigurationIdx], "_AOC"));
-				bSucceeded &= CreateNSP(SC, Params, TargetConfigurationIdx, ProgramId, MetaFile, DescFile, AOCOutputNsp, true, bRuntimeAddOnContentInstall, ApplicationVersion, AddOnContentChunks, InitialChunkFilterRules);
+				
+				bool bCreateAOCSucceeded = CreateNSP(SC, Params, TargetConfigurationIdx, ProgramId, MetaFile, DescFile, AOCOutputNsp, true, bRuntimeAddOnContentInstall, AddOnContentVersion, AddOnContentChunks, InitialChunkFilterRules);
+
+				if (bCreateAOCSucceeded)
+				{
+					CreateAddOnContentInstallBatchFile(Params, OutputNsp, ProgramId, bRuntimeAddOnContentInstall);
+				}
+				bSucceeded &= bCreateAOCSucceeded;
 			}
 
 			if (bSucceeded)
@@ -865,6 +894,7 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 				CopyFile(MetaFile, DestinationMetaFile, false);
 				SetFileAttributes(DestinationMetaFile, false);
 
+				Console.Write(MetaFile);
 				// Export any files referenced in the .meta file. We'll need them if we rebuild the monolithic package (such as when we need to update the ApplicationVersion to do a BuildDiff against an arbitrary build).
 				ExportResources(Params, SC, MetaFile, TargetConfigurationIdx);
 
@@ -889,13 +919,15 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 					MetadataRootObject = new JObject();
 
 					MetadataRootObject.Add("version", MetadataVersion);
-				}
-				else
-				{
-					Logger.LogWarning($"-GenerateMetadata not found in AdditonalPackageOptions {Params.AdditionalPackageOptions}");
+
+					MetadataRootObject.Add("build_info", new JObject
+					{
+						{ "branch", GetOptionValue(Params.AdditionalPackageOptions, "Branch") },
+						{ "changelist", GetOptionValue(Params.AdditionalPackageOptions, "Changelist") },
+					});
 				}
 
-				// Merge mutliple .nsp files into a single .nsp file if requested
+				// Merge multiple .nsp files into a single .nsp file if requested
 				bool bMergedNsp = false;
 				string MergedNspDescString = "";
 				UnrealTargetPlatform MergedNspPlatform = TargetPlatform;
@@ -920,7 +952,7 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 						List<(string MergeNspName, UnrealTargetPlatform MergeNspPlatform)> MergeNspsInfo = new();
 
 						string[] MergeNspsAndPlatforms = MergeInput.Split(";");
-						foreach(string entry in MergeNspsAndPlatforms)
+						foreach (string entry in MergeNspsAndPlatforms)
 						{
 							string[] NspAndPlatform = entry.Split(",");
 							MergeNspsInfo.Add((NspAndPlatform[0], UnrealTargetPlatform.Parse(NspAndPlatform[1])));
@@ -928,7 +960,7 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 
 						if (MergeNspsInfo.Count > 0)
 						{
-							foreach ( var entry in MergeNspsInfo)
+							foreach (var entry in MergeNspsInfo)
 							{
 								MergedNsps.Add(entry.Item1);
 								MergedNspDescString += $@",{NintendoExports.LocateDescFile(entry.Item2, SC.ProjectRoot)}";
@@ -941,26 +973,46 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 							}
 							File.Move(OutputNsp, InputNsp);
 
+							// Create install batch files for the original build
+							CreateInstallBatchFile(SC, InputNsp, NintendoSDKPlatformIdentifier);
+							CreateRunBatchFile(SC, InputNsp, NintendoSDKPlatformIdentifier);
+
 							bMergedNsp = MergeNSP(OutputNsp, MergedNspPlatform, InputNsp, MergedNsps);
+							if (bMergedNsp)
+							{
+								CreateInstallBatchFile(SC, OutputNsp, GetPlatformIdentifierFromTargetPlatform(MergedNspPlatform));
+								CreateRunBatchFile(SC, OutputNsp, GetPlatformIdentifierFromTargetPlatform(MergedNspPlatform));
+							}
 							bSucceeded &= bMergedNsp;
-						}
 
-						if (bMergedNsp && MetadataRootObject != null)
-						{
-							Logger.LogInformation("Adding merged_nsp info to metadata.");
+							if (bMergedNsp && MetadataRootObject != null)
+							{
+								Logger.LogInformation("Adding merged_nsp info to metadata.");
 
-							JArray MergedNspsEntries = new JArray(
-								MergeNspsInfo.Select( t => new JObject
+								MetadataRootObject.Add("primary_nsp", new JObject
 								{
+									{ "name", Path.GetFileName(InputNsp) },
+									{ "platform", TargetPlatform.ToString() },
+									{ "desc_file", NintendoExports.LocateDescFile(TargetPlatform, SC.ProjectRoot) }
+								});
+
+								JArray MergedNspsEntries = new JArray(
+									MergeNspsInfo.Select(t => new JObject
+									{
 									{ "name", t.Item1 },
 									{ "platform", t.Item2.ToString() },
 									{ "desc_file", NintendoExports.LocateDescFile(t.Item2, SC.ProjectRoot) }
-								})
-							);
+									})
+								);
 
-							MetadataRootObject.Add("merged_nsps", MergedNspsEntries);
-
-							MetadataRootObject.Add("package_platform", MergedNspPlatform.ToString());
+								MetadataRootObject.Add("merged_nsps", MergedNspsEntries);
+								MetadataRootObject.Add("package_platform", MergedNspPlatform.ToString());
+							}
+						}
+						else
+						{
+							CreateInstallBatchFile(SC, OutputNsp, GetPlatformIdentifierFromTargetPlatform(MergedNspPlatform));
+							CreateRunBatchFile(SC, OutputNsp, GetPlatformIdentifierFromTargetPlatform(MergedNspPlatform));
 						}
 					}
 					else
@@ -968,9 +1020,22 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 						Logger.LogWarning("-MergeNsps and -MergedNspPlatform must be provided to merge multiple nsps into a single package.");
 					}
 				}
-				else if(MetadataRootObject != null)
+				else
 				{
-					MetadataRootObject.Add("package_platform", TargetPlatform.ToString());
+					if (MetadataRootObject != null)
+					{
+						MetadataRootObject.Add("primary_nsp", new JObject
+						{
+							{ "name", Path.GetFileName(OutputNsp) },
+							{ "platform", TargetPlatform.ToString() },
+							{ "desc_file", NintendoExports.LocateDescFile(TargetPlatform, SC.ProjectRoot) }
+						});
+
+						MetadataRootObject.Add("package_platform", TargetPlatform.ToString());
+					}
+
+					CreateInstallBatchFile(SC, OutputNsp, GetPlatformIdentifierFromTargetPlatform(MergedNspPlatform));
+					CreateRunBatchFile(SC, OutputNsp, GetPlatformIdentifierFromTargetPlatform(MergedNspPlatform));
 				}
 
 				if (Params.IsGeneratingPatch)
@@ -1118,6 +1183,8 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 
 					if (CreatePatchNSP(SC, Params, TargetConfigurationIdx, ProgramId, PatchDesc, OutputNsp, ReleaseVersionNsp, LatestPatchNsp, PatchOutputNsp, PatchPlatform, AdditionalOptions))
 					{
+						CreateInstallAsPatchBatchFile(SC, PatchOutputNsp, ReleaseVersionNsp, GetPlatformIdentifierFromTargetPlatform(PatchPlatform));
+
 						float FragmentationPct = 0.0f;
 						GetPatchFragmentation(PatchOutputNsp, ReleaseVersionNsp, ref FragmentationPct, GetPlatformIdentifierFromTargetPlatform(PatchPlatform));
 
@@ -1201,7 +1268,7 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 								PatchCommandLine += "--defragment";
 								if (DefragmentBlockSize > 0)
 								{
-									PatchCommandLine += $@" --defragment-block-size {DefragmentBlockSize.ToString()}";
+									PatchCommandLine += $@" --defragment-size {DefragmentBlockSize.ToString()}";
 								}
 							}
 
@@ -1217,11 +1284,6 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 							JObject PatchSection = new JObject();
 							PatchSection.Add("command_line", PatchCommandLine);
 
-							if (!string.IsNullOrEmpty(LatestPatchNsp))
-							{
-								PatchSection.Add("previous_patch_hash", GetPropertyValue(LatestPatchNsp, "Digest"));
-							}
-
 							string AdditionalPatchMetadata = new string("");
 							if (GetOptionValue(Params.AdditionalPackageOptions, "AdditionalPatchMetadata", ref AdditionalPatchMetadata))
 							{
@@ -1229,24 +1291,41 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 								AdditionalPatchMetadataKVs.ToList().ForEach(x => PatchSection.Add(x.Key, x.Value));
 							}
 
-							MetadataRootObject.Add("patch", PatchSection);
-						}
+							string PackageBaseName = GetFilenameWithoutAnyExtensions(LatestPatchNsp);
 
-						if (HasPackagingOption(Params.AdditionalPackageOptions, SC.ProjectRoot, "GeneratePatchInfo"))
-						{
-							// Generate PatchInfo metadata
-							Dictionary<string, double> PatchInfo = new Dictionary<string, double>();
-							if (DefragmentBlockSize > 0)
+							if (FindAndLoadPackagingParameters(LatestPatchNsp, out PackagingParameters LatestPatchMetadata))
 							{
-								PatchInfo.Add("DefragmentBlockSize", DefragmentBlockSize);
-							}
-							PatchInfo.Add("FragmentationPercentage", FragmentationPct);
-							string JsonContent = JsonConvert.SerializeObject(PatchInfo);
-							string MetadataFile = Path.Combine(GetPackageOutputDirectory(Params, SC), Path.GetFileNameWithoutExtension(BaseNspName) + "-PatchInfo.json");
-							Logger.LogInformation("Generating Metadata file {MetadataFile}.", MetadataFile);
-							File.WriteAllText(MetadataFile, JsonContent);
-						}
+								PatchSection.Add("previous_patch_hash", GetPropertyValue(LatestPatchNsp, "Digest", GetPlatformIdentifierFromTargetPlatform(LatestPatchMetadata.PackagePlatform)));
 
+								PatchSection.Add("previous_patch_build_info", new JObject
+								{
+									{ "branch", LatestPatchMetadata.PrimaryBuildInfo != null ? LatestPatchMetadata.PrimaryBuildInfo.branch : "Unknown" },
+									{ "changelist", LatestPatchMetadata.PrimaryBuildInfo != null ? LatestPatchMetadata.PrimaryBuildInfo.changelist : "00000000" },
+								});
+							}
+							else
+							{
+								Logger.LogWarning($"Unable to find packaging data for {LatestPatchNsp}. Metadata section will be incomplete!");
+							}
+
+							MetadataRootObject.Add("patch", PatchSection);
+
+							if (HasPackagingOption(Params.AdditionalPackageOptions, SC.ProjectRoot, "GeneratePatchInfo"))
+							{
+								// Generate PatchInfo metadata
+								Dictionary<string, double> PatchInfo = new Dictionary<string, double>();
+								if (DefragmentBlockSize > 0)
+								{
+									PatchInfo.Add("DefragmentBlockSize", DefragmentBlockSize);
+								}
+								PatchInfo.Add("FragmentationPercentage", FragmentationPct);
+
+								string JsonContent = JsonConvert.SerializeObject(PatchInfo);
+								string MetadataFile = Path.Combine(GetPackageOutputDirectory(Params, SC), Path.GetFileNameWithoutExtension(BaseNspName) + "-PatchInfo.json");
+								Logger.LogInformation($"Generating defragmentation info file {MetadataFile}.");
+								File.WriteAllText(MetadataFile, JsonContent);
+							}
+						}
 					}
 					else
 					{
@@ -1256,13 +1335,6 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 
 				if (MetadataRootObject != null)
 				{
-					MetadataRootObject.Add("primary_nsp", new JObject
-					{
-						{ "name", Path.GetFileName(OutputNsp) },
-						{ "platform", TargetPlatform.ToString() },
-						{ "desc_file", NintendoExports.LocateDescFile(TargetPlatform, SC.ProjectRoot) }
-					});
-
 					MetadataRootObject.Add("nintendo_sdk_root", NintendoExports.GetSDKInstallLocation());
 
 					string AdditionalMetadata = new string("");
@@ -1281,9 +1353,13 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 					Logger.LogInformation("No Metadata to write.");
 				}
 			}
-			if (!bSucceeded) return;
 
 			PrintRunTime();
+
+			if (!bSucceeded)
+			{
+				return;
+			}
 		});
 
 		File.Delete(RomFile);
@@ -1387,7 +1463,7 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 
 	}
 
-	private bool MergeNSP(string OutputNsp, UnrealTargetPlatform MergePlatform, string PrimaryNsp, List<string> MergedNsps)
+	public static bool MergeNSP(string OutputNsp, UnrealTargetPlatform MergePlatform, string PrimaryNsp, List<string> MergedNsps)
 	{
 		string MergedNspPlatformName = GetPlatformIdentifierFromTargetPlatform(MergePlatform);
 
@@ -1525,9 +1601,7 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 		{
 			// run MakeMeta to make a new .npdm
 			string MakeMetaExe = Path.Combine(NintendoExports.GetSDKInstallLocation(), "Tools/CommandLineTools/MakeMeta/MakeMeta.exe");
-			string MakeMetaCommandLine = NintendoExports.GetMakeMetaCommandline(MetaFile, DescFile, NpdmFile, AuthoringToolPlatformArg);
-			string WrappedMakeMetaCommandLine = $"/C set \"DOTNET_ROOT=\" && set \"DOTNET_HOST_PATH=\" && set \"DOTNET_MULTILEVEL_LOOKUP=1\" && set \"DOTNET_ROLL_FORWARD=LatestMajor\" && \"{MakeMetaExe}\" {MakeMetaCommandLine}";
-			if (Run("cmd.exe", WrappedMakeMetaCommandLine).ExitCode > 0)
+			if (Run(MakeMetaExe, NintendoExports.GetMakeMetaCommandline(MetaFile, DescFile, NpdmFile, AuthoringToolPlatformArg)).ExitCode > 0)
 			{
 				// restore Npdm before we crap out
 				File.Delete(NpdmFile);
@@ -1631,16 +1705,6 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 			File.Delete(FilterRulesFile);
 		}
 
-		if (bAddOnContentNSP)
-		{
-			CreateAddOnContentInstallBatchFile(Params, OutputNsp, ProgramId, bRunTimeAddOnContentInstall);
-		}
-		else
-		{
-			CreateInstallBatchFile(SC, OutputNsp);
-			CreateRunBatchFile(SC, OutputNsp);
-		}
-
 		return true;
 	}
 
@@ -1694,7 +1758,6 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 			return false;
 		}
 
-		CreateInstallAsPatchBatchFile(SC, PatchNsp, ReleaseVersionNsp);
 		return true;
 	}
 
@@ -1702,7 +1765,8 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 	private string GetPropertyValue(string NspName, string PropertyEntryName, string OverridePlatform = null)
 	{
 		string AuthoringToolPath = Path.Combine(NintendoExports.GetSDKInstallLocation(), @"Tools\CommandLineTools\AuthoringTool\AuthoringTool.exe");
-		string CommandLine = string.Format("getproperty --xml {0} {1}", NspName, AuthoringToolPlatformArg);
+		string Platform = OverridePlatform != null ? OverridePlatform : GetPlatformIdentifierFromTargetPlatform(TargetPlatform);
+		string CommandLine = $"getproperty --xml --platform {Platform} {NspName}";
 
 		int ExitCode;
 		string Results = Utils.RunLocalProcessAndReturnStdOut(AuthoringToolPath, CommandLine, out ExitCode);
@@ -1722,29 +1786,52 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 					}
 					else
 					{
-						throw new AutomationException("{0} properties didn't include a Property->{1} element.", NspName, PropertyEntryName);
+						Logger.LogInformation($"Property element is empty.");
+						Logger.LogInformation(Results);
+						return "";
 					}
 				}
 				else
 				{
-					throw new AutomationException("{0} properties didn't include a Property element.", NspName);
+					Logger.LogInformation($"Property element not found.");
+					Logger.LogInformation(Results);
+					return "";
 				}
 			}
 			else
 			{
-				throw new AutomationException("AuthoringTool getproperty didn't return valid XML data for {0}", NspName);
+				Logger.LogInformation($"Failed to parse getproperty results.");
+				Logger.LogInformation(Results);
+				return "";
 			}
 		}
 		else
 		{
-			throw new AutomationException("AuthoringTool failed running getproperty for {0}", NspName);
+			Logger.LogInformation($"AuthoringTool failed to run getproperty on {NspName}");
+			Logger.LogInformation(Results);
+			return "";
 		}
 	}
 
-	private int GetReleaseVersion(string NspName)
+	private int GetNextReleaseVersion(string NspName, string OverridePlatform = null)
 	{
-		string ReleaseString = GetPropertyValue(NspName, "ReleaseVersion");
-		return int.Parse(ReleaseString);
+		if( string.IsNullOrEmpty(OverridePlatform))
+		{
+			PackagingParameters NspParameters;
+			if(FindAndLoadPackagingParameters(NspName, out NspParameters))
+			{
+				OverridePlatform = GetPlatformIdentifierFromTargetPlatform(NspParameters.PackagePlatform);
+			}
+		}
+
+		if(OverridePlatform == null)
+		{
+			Logger.LogWarning($"Package platform was not supplied or found for {NspName}. GetNextReleaseVersion will return -1.");
+			return -1;
+		}
+
+		string ReleaseString = GetPropertyValue(NspName, "ReleaseVersion", OverridePlatform);
+		return !string.IsNullOrEmpty(ReleaseString) ? int.Parse(ReleaseString) +1 : -1;
 	}
 
 	private void AnalyzePatchNSP(string PatchNsp, string ReleaseVersionNsp, string OverridePlatform)
@@ -2030,7 +2117,7 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 				}
 				else
 				{
-					Logger.LogInformation("\'--defragment-block-size\': {03} Fragmentation: {1:N2}% PatchSize {2}MB.", Result.Item1, Result.Item2, Result.Item3);
+					Logger.LogInformation("\'--defragment-size\': {03} Fragmentation: {1:N2}% PatchSize {2}MB.", Result.Item1, Result.Item2, Result.Item3);
 				}
 			}
 
@@ -2093,6 +2180,71 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 		}
 
 		return true;
+	}
+	static bool FindAndLoadPackagingParameters(string NspFilePath, out PackagingParameters PackagingParameters)
+	{
+		return FindAndLoadPackagingParameters(Path.GetDirectoryName(NspFilePath), Path.GetFileNameWithoutExtension(NspFilePath), out PackagingParameters);
+	}
+
+	static bool FindAndLoadPackagingParameters(string MetadataDirectory, string FileNameBase, out PackagingParameters PackagingParameters)
+	{
+		string MetadataFilePath = FindPackagingParameters(MetadataDirectory, FileNameBase);
+
+		if (string.IsNullOrEmpty(MetadataFilePath))
+		{
+			PackagingParameters = null;
+			return false;
+		}
+		else
+		{
+			string MetadataFileContents = File.ReadAllText(MetadataFilePath);
+			PackagingParameters = new PackagingParameters(MetadataFileContents, null);
+			return true;
+		}
+	}
+
+	static string GetPackagingParametersFilename(string PackageBaseFileNameOrPath)
+	{
+		return Path.GetFileNameWithoutExtension(PackageBaseFileNameOrPath).Replace("-patch", null) + "-PackagingParameters.json";
+	}
+
+	static string FindPackagingParameters(string MetadataBaseDirectory, string MetadataBaseFilename)
+	{
+		string MetadataFilename = GetPackagingParametersFilename(MetadataBaseFilename);
+		return FindMetadataFile(MetadataBaseDirectory, MetadataFilename);
+	}
+	static string FindPackagingParameters(string NspFilePath)
+	{
+		return FindPackagingParameters(Path.GetDirectoryName(NspFilePath), Path.GetFileName(NspFilePath));
+	}
+
+	static string FindMetadataFile(string MetadataBaseDirectory, string MetadataBaseFilename)
+	{
+		string MetadataFilePath = Path.Combine(MetadataBaseDirectory, MetadataBaseFilename);
+
+		Logger.LogInformation($"Looking for packaging parameters metadata file {MetadataFilePath} from {MetadataBaseDirectory} {MetadataBaseFilename}");
+
+		if (!File.Exists(MetadataFilePath))
+		{
+			MetadataFilePath = Path.Combine(MetadataBaseDirectory, "Metadata", MetadataBaseFilename);
+			Logger.LogInformation($"Looking for packaging parameters metadata file {MetadataFilePath}");
+			if (!File.Exists(MetadataFilePath))
+			{
+				Logger.LogWarning($@"Unable to find Switch packaging parameters metadatafile {MetadataBaseFilename} in {MetadataBaseDirectory} or {MetadataBaseDirectory}\Metadata");
+				return null;
+			}
+		}
+
+		return MetadataFilePath;
+	}
+	
+	static void OverridePackagePlatformFromMetaData(string BuildRootDir, string BuildName, ref string PackagePlatform)
+	{
+		PackagingParameters Metadata = null;
+		if (FindAndLoadPackagingParameters(BuildRootDir, BuildName, out Metadata))
+		{
+			PackagePlatform = NintendoPlatform.GetPlatformIdentifierFromTargetPlatform(Metadata.PackagePlatform);
+		}
 	}
 
 	private static bool CreateTemporaryPatchNSP(string PatchNsp, string BuildNsp, string PreviousPatchNsp, string BaseBuildNsp, string AdditionalToolOptions, string ProgramId, string DescFile)
@@ -2172,30 +2324,30 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 	}
 
 
-	void CreateRunBatchFile(DeploymentContext SC, string OutputNsp)
+	void CreateRunBatchFile(DeploymentContext SC, string OutputNsp, string PackagePlatform)
 	{
 		string TemplateFileFQPN = FileReference.Combine(SC.EngineRoot, $@"Platforms\{TargetPlatformType}\Build\RunNSP.template").FullName;
 		string OutputBatchFilename = Path.Combine(Path.GetDirectoryName(OutputNsp), "Run_" + Path.ChangeExtension(Path.GetFileName(OutputNsp), ".bat"));
 
-		CreateBatchFileFromTemplate(TemplateFileFQPN, Path.GetFileName(OutputNsp), OutputBatchFilename);
+		CreateBatchFileFromTemplate(TemplateFileFQPN, Path.GetFileName(OutputNsp), PackagePlatform, OutputBatchFilename);
 	}
-	void CreateInstallBatchFile(DeploymentContext SC, string OutputNsp)
+	void CreateInstallBatchFile(DeploymentContext SC, string OutputNsp, string PackagePlatform)
 	{
 		string TemplateFileFQPN = FileReference.Combine(SC.EngineRoot, $@"Platforms\{TargetPlatformType}\Build\InstallNSP.template").FullName;
 		string OutputBatchFilename = Path.Combine(Path.GetDirectoryName(OutputNsp), "Install_" + Path.ChangeExtension(Path.GetFileName(OutputNsp), ".bat"));
 
-		CreateBatchFileFromTemplate(TemplateFileFQPN, Path.GetFileName(OutputNsp), OutputBatchFilename);
+		CreateBatchFileFromTemplate(TemplateFileFQPN, Path.GetFileName(OutputNsp), PackagePlatform, OutputBatchFilename);
 	}
 
-	void CreateInstallAsPatchBatchFile(DeploymentContext SC, string OutputNsp, string BaseNsp)
+	void CreateInstallAsPatchBatchFile(DeploymentContext SC, string OutputNsp, string BaseNsp, string PackagePlatform)
 	{
 		string TemplateFileFQPN = FileReference.Combine(SC.EngineRoot, $@"Platforms\{TargetPlatformType}\Build\InstallNSPAsPatch.template").FullName;
 		string OutputBatchFilename = Path.Combine(Path.GetDirectoryName(OutputNsp), "Install_" + Path.ChangeExtension(Path.GetFileName(OutputNsp), ".bat"));
 
-		CreatePatchBatchFileFromTemplate(TemplateFileFQPN, Path.GetFileName(OutputNsp), Path.GetFileName(BaseNsp), OutputBatchFilename);
+		CreatePatchBatchFileFromTemplate(TemplateFileFQPN, Path.GetFileName(OutputNsp), Path.GetFileName(BaseNsp), PackagePlatform, OutputBatchFilename);
 	}
 
-	void CreateBatchFileFromTemplate(string TemplateFilename, string OutputNsp, string OutputBatchFileName)
+	void CreateBatchFileFromTemplate(string TemplateFilename, string OutputNsp, string PackagePlatform, string OutputBatchFileName)
 	{
 		string NL = Environment.NewLine;
 
@@ -2203,13 +2355,13 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 
 		foreach (string LineIn in File.ReadAllLines(TemplateFilename))
 		{
-			OutputBatchFileContents += LineIn.Replace("{InNSPFilename}", OutputNsp) + NL;
+			OutputBatchFileContents += LineIn.Replace("{InNSPFilename}", OutputNsp).Replace("{InPackagePlatform}", PackagePlatform) + NL;
 		}
 
 		string OutputBatchFile = Path.Combine(Path.GetDirectoryName(OutputNsp), OutputBatchFileName);
 		File.WriteAllText(OutputBatchFile, OutputBatchFileContents);
 	}
-	void CreatePatchBatchFileFromTemplate(string TemplateFilename, string OutputNsp, string BaseNsp, string OutputBatchFileName)
+	void CreatePatchBatchFileFromTemplate(string TemplateFilename, string OutputNsp, string BaseNsp, string PackagePlatform, string OutputBatchFileName)
 	{
 		string NL = Environment.NewLine;
 
@@ -2217,7 +2369,7 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 
 		foreach (string LineIn in File.ReadAllLines(TemplateFilename))
 		{
-			OutputBatchFileContents += LineIn.Replace("{InBaseNSPFilename}", BaseNsp).Replace("{InPatchNSPFilename}", OutputNsp) + NL;
+			OutputBatchFileContents += LineIn.Replace("{InBaseNSPFilename}", BaseNsp).Replace("{InPatchNSPFilename}", OutputNsp).Replace("{InPackagePlatform}", PackagePlatform) + NL;
 		}
 
 		string OutputBatchFile = Path.Combine(Path.GetDirectoryName(OutputNsp), OutputBatchFileName);
@@ -2393,6 +2545,7 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 		string ControlTool = Path.Combine(ToolDir, "ControlTarget.exe");
 		if (!File.Exists(ControlTool))
 		{
+			Logger.LogError($"GetValidTargetName(): ControlTarget.exe is not available at '{ControlTool}'");
 			return string.Empty;
 		}
 
@@ -2408,6 +2561,10 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 			{
 				TargetName = TargetName.Split()[0];
 			}
+			else
+			{
+				Logger.LogError($"GetValidTargetName(): {CommandLine} failed to return a valid name for the default devkit target.  Is an appropriate default devkit target connected?");
+			}
 		}
 
 		// If TargetName is not empty make sure we are connected to it.
@@ -2416,13 +2573,22 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 			string CommandLine = NintendoExports.GetSDKVersionInt() >= NintendoExports.VersionXYZToInt("17", "5", "0") ?
 				$"list-target --tag _{NintendoSDKPlatformIdentifier}" :
 				"list-target";
+
+			// "--detail" will print both the name and the serial number of the devkit to the log
+  			CommandLine += " --detail";
+
 			string TargetList = UnrealBuildTool.Utils.RunLocalProcessAndReturnStdOut(ControlTool, CommandLine);
 			if (!string.IsNullOrWhiteSpace(TargetList) && TargetList.ToUpper().IndexOf(TargetName.ToUpper()) != -1)
 			{
 				return TargetName;
 			}
+			else
+			{
+				Logger.LogError($"GetValidTargetName(): '{CommandLine}' failed to find target named '{TargetName}', is target configured correctly?");
+			}
 		}
 
+		Logger.LogError($"GetValidTargetName(): failed to get valid name for '{InTargetName}'");
 		return string.Empty;
 	}
 
@@ -2681,13 +2847,13 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 
 	public override bool PublishSymbols(DirectoryReference SymbolStoreDirectory, List<FileReference> Files,
 			bool bIndexSources, List<FileReference> SourceFiles,
-			string Product, string Branch, int Change, string BuildVersion = null)
+			string Product, string Branch, int Change, string BuildVersion = null, string VFSMapping = null)
 	{
 		Logger.LogInformation("Publishing symbols to \"{SymbolStoreDirectory}\"", SymbolStoreDirectory);
 
 		// Find the symbol store tool.
-		string UtilPath = NintendoExports.FindTmFile("NXSymStore.exe");
-		if (UtilPath == null)
+		string UtilPath = Path.Combine(NintendoExports.GetSDKInstallLocation(), "Tools", "CommandLineTools", "NXSymStore.exe");
+		if (!File.Exists(UtilPath))
 		{
 			Logger.LogError("Couldn't find NXSymStore. Cannot upload symbols.");
 			return false;
@@ -2936,6 +3102,11 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 
 	public override bool UpdateDevicePrerequisites(DeviceInfo Device, BuildCommand Command, ITurnkeyContext TurnkeyContext, bool bVerifyOnly)
 	{
+		// GetROMRedirectionTarget() will implicitly connect the device, try and leave it in it's
+		// originally state rather than keeping the implicit connection.
+		Target Target = !String.IsNullOrWhiteSpace(Device.Name) ? GetTargetManagerDevice(Device.Name) : null;
+		bool WasConnected = Target != null ? Target.GetIsConnected() : false;
+
 		string CurrentROMRedirectTarget = GetROMRedirectionTarget(Device.Name);
 		if(string.IsNullOrEmpty(CurrentROMRedirectTarget))
 		{
@@ -2956,6 +3127,12 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 				Logger.LogInformation("Restarting target to apply change.");
 				ResetAndConnectDevice(Device.Name);
 			}
+		}
+
+		// Disconnect if we didn't enter this method connected.
+		if (Target != null && !WasConnected && Target.GetIsConnected())
+		{
+			Target.Disconnect();
 		}
 
 		// If ROM Redirection is off, we can just continue
@@ -3190,19 +3367,21 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 				DeviceInfo Device = new DeviceInfo(TargetPlatformType);
 				Device.Name = DeviceName;
 
-				if (!Target.GetIsConnected())
+				bool ConnectedState = Target.GetIsConnected();
+				if (!ConnectedState)
 				{
 					Logger.LogInformation($"Nintendo device '{Device.Name}' is disconnected, attempting connection");
 					Target.Connect();
+
+					// Sleep for a bit after connection or we will get a Nintendo.Tm.TmException:
+					// (Error_28) The service that handles this isn't available.
+					Thread.Sleep(1000);
+
 					if (!Target.GetIsConnected())
 					{
 						Logger.LogInformation($"Failed to connect to Nintendo device '{Device.Name}'");
 						continue;
 					}
-
-					// Sleep for a bit after connection or we will get a Nintendo.Tm.TmException:
-					// (Error_28) The service that handles this isn't available.
-					Thread.Sleep(1000);
 				}
 
 				Target DefaultTarget;
@@ -3218,6 +3397,12 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 				string[] SplitFWVersion = FullFirmwareVersion.Split();
 				Device.SoftwareVersion = SplitFWVersion[0];
 				Devices.Add(Device);
+
+				if (!ConnectedState)
+				{
+					Logger.LogInformation($"Nintendo device '{Device.Name}' was originally disconnected, attempting disconnection");
+					Target.Disconnect();
+				}
 
 				//Console.WriteLine($">>>>>>>>>>>>>>>> Device {DeviceType}: {Device.Id} {Device.Type} {Device.bIsDefault} {Device.SoftwareVersion}");
 			}
@@ -3577,4 +3762,3 @@ public abstract class NintendoPlatform : AutomationTool.Platform
 		return bResult;
 	}
 }
-

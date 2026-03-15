@@ -1311,6 +1311,16 @@ namespace UnrealBuildTool
 				}
 			}
 
+			if (RulesObject.bEnableConstInitUObject && RulesObject.bWithLiveCoding)
+			{
+				throw new BuildException("bEnableConstInitUObject and bWithLiveCoding cannot currently be set simultaneously");
+			}
+
+			if (RulesObject.bEnableConstInitUObject && RulesObject.LinkType != TargetLinkType.Monolithic)
+			{
+				throw new BuildException("bEnableConstInitUObject can currently only be set on monolithic targets");
+			}
+
 			// If we're using the shared build environment, make sure all the settings are valid
 			if (RulesObject.BuildEnvironment == TargetBuildEnvironment.Shared)
 			{
@@ -1321,6 +1331,10 @@ namespace UnrealBuildTool
 				catch (Exception)
 				{
 					RulesObject.PrintBuildSettingsInfoWarnings();
+
+					// Prepare and write a partial receipt for downstream systems to use in related messaging about shared environment invalidations.
+					PrepareAndWritePartialReceipt(Descriptor, RulesObject, RulesAssembly, Logger);
+
 					throw;
 				}
 			}
@@ -1390,7 +1404,6 @@ namespace UnrealBuildTool
 			{
 				Target.PreBuildSetup(Logger);
 			}
-
 			return Target;
 		}
 
@@ -2179,6 +2192,36 @@ namespace UnrealBuildTool
 						{
 							Manifest.ModuleNameToFileName[Module.Name] = Binary.OutputFilePath.GetFileName();
 						}
+
+						// In order to correctly lookup shared merged library dependencies at runtime, use decorated filenames
+						string GetFilenameFromLibraryName(string LibraryName)
+						{
+							string FilenameFragment = $"{AppName}{Rules.DecoratedSeparator}{LibraryName}";
+							IEnumerable<UEBuildBinary> Candidates = Binaries.Where(x =>
+								x.Type == UEBuildBinaryType.DynamicLinkLibrary && x.OutputFilePath.GetFileNameWithoutAnyExtensions().Contains(FilenameFragment));
+							return Candidates.FirstOrDefault()?.OutputFilePath.GetFileName().ToString() ?? LibraryName;
+						}
+
+						foreach (string Root in Rules.MergePlugins)
+						{
+							string RootFilename = GetFilenameFromLibraryName(Root);
+							if (!Manifest.LibraryDependencies.ContainsKey(RootFilename))
+							{
+								Manifest.LibraryDependencies.Add(RootFilename, new());
+							}
+						}
+
+						foreach (KeyValuePair<string, IEnumerable<string>> SharedGroupRule in Rules.MergePluginsShared)
+						{
+							foreach (string Root in SharedGroupRule.Value)
+							{
+								string RootFilename = GetFilenameFromLibraryName(Root);
+								if (Manifest.LibraryDependencies.ContainsKey(RootFilename))
+								{
+									Manifest.LibraryDependencies[RootFilename].Add(GetFilenameFromLibraryName(SharedGroupRule.Key));
+								}
+							}
+						}
 					}
 				}
 			}
@@ -2287,7 +2330,12 @@ namespace UnrealBuildTool
 			}
 
 			// Create the receipt
-			TargetReceipt Receipt = new TargetReceipt(ProjectFile, TargetName, TargetType, Platform, Configuration, Version, Architectures, Rules.IsTestTarget);
+			TargetReceipt Receipt = new TargetReceipt(ProjectFile, TargetName, TargetType, Platform, Configuration, Version, Architectures, Rules.IsTestTarget, Rules.DefaultBuildSettings, Rules.BuildEnvironment);
+
+			if (BuildProducts.Count == 0 && RuntimeDependencies.Count == 0)
+			{
+				return Receipt;
+			}
 
 			if (!Rules.bShouldCompileAsDLL)
 			{
@@ -2421,6 +2469,42 @@ namespace UnrealBuildTool
 			ToolChain.ModifyTargetReceipt(Rules, Receipt);
 
 			return Receipt;
+		}
+
+		/// <summary>
+		/// Writes out a partial <see cref="TargetReceipt"/>. This contains a minimal set of properties.
+		/// </summary>
+		/// <param name="Descriptor">The target descriptor to use in target receipt construction.</param>
+		/// <param name="RulesObject">The target rules to use in target receipt construction.</param>
+		/// <param name="RulesAssembly">The rules assembly to use in target receipt construction.</param>
+		/// <param name="Logger">Logger for error and info emission.</param>
+		/// <remarks>This should be used to emit minimal target data in failure circumstances.</remarks>
+		static TargetReceipt? PrepareAndWritePartialReceipt(TargetDescriptor Descriptor, TargetRules RulesObject, RulesAssembly RulesAssembly, ILogger Logger)
+		{
+			try
+			{
+				UEBuildTarget incompleteTarget = new UEBuildTarget(Descriptor, new ReadOnlyTargetRules(RulesObject), RulesAssembly, Logger);
+				UEToolChain targetToolChain = incompleteTarget.CreateToolchain(incompleteTarget.Platform, Logger);
+				TargetReceipt incompleteTargetReceipt = incompleteTarget.PrepareReceipt(targetToolChain, [], []);
+
+				if (incompleteTargetReceipt != null)
+				{
+					FileReference receipt = incompleteTarget.ReceiptFileName;
+					DirectoryReference.CreateDirectory(receipt.Directory);
+					incompleteTargetReceipt.Write(receipt);
+
+					Logger.LogInformation("Wrote partial receipt to {ReceiptPath}", receipt);
+				}
+
+				return incompleteTargetReceipt;
+			}
+			catch (Exception innerEx)
+			{
+				Logger.LogWarning("Failed to write partial receipt for target {Descriptor}: {Message}", Descriptor.Name, innerEx.Message);
+				Logger.LogDebug("{InnerException}", innerEx);
+				
+				return null;
+			}
 		}
 
 		/// <summary>
@@ -2563,7 +2647,15 @@ namespace UnrealBuildTool
 			// Prepare cached data for UHT header generation
 			using (GlobalTracer.Instance.BuildSpan("ExternalExecution.SetupUObjectModules()").StartActive())
 			{
-				ExternalExecution.SetupUObjectModules(ModulesToGenerateHeadersFor, Rules.Platform, ProjectDescriptor, Makefile.UObjectModules, Makefile.UObjectModuleHeaders, Rules.GeneratedCodeVersion, MetadataCache, Logger);
+				ExternalExecution.SetupUObjectModules(
+					ModulesToGenerateHeadersFor, 
+					Rules.Platform,
+					ProjectDescriptor, 
+					Makefile.UObjectModules, 
+					Makefile.UObjectModuleHeaders, 
+					Makefile.ExecutableFile.Directory, 
+					Rules.GeneratedCodeVersion, 
+					MetadataCache);
 			}
 
 			if (Rules.NativePointerMemberBehaviorOverride != null)
@@ -2576,12 +2668,20 @@ namespace UnrealBuildTool
 				};
 			}
 
+			if (Rules.bEnableConstInitUObject)
+			{
+				Makefile.UHTTargetSettings.CompiledInObjectFormat = UhtCompiledInObjectFormat.ConstInit;
+				// Generate max name/value pairs for UENUMs in the compiled-in data
+				Makefile.UHTTargetSettings.GenerateEnumMaxValues = true;
+			}
+			Logger.LogInformation($"UHT compiled-in object format {Makefile.UHTTargetSettings.CompiledInObjectFormat}");
+
 			// UHT mode uses this to create the makefile at least to the point where UHT would have valid manifest information
 			if (bInitOnly)
 			{
 				return Makefile;
 			}
-
+			
 #if __VPROJECT_AVAILABLE__
 			// Copy Verse BPVM usage flag
 			Makefile.bUseVerseBPVM = Rules.bUseVerseBPVM;
@@ -2593,7 +2693,7 @@ namespace UnrealBuildTool
 			// files that are injected as top level prerequisites.  If UHT only emitted included header files, we wouldn't need to run it during the Gather phase at all.
 			if (Makefile.UObjectModules.Count > 0)
 			{
-				await ExternalExecution.ExecuteHeaderToolIfNecessaryAsync(BuildConfiguration, ProjectFile, Makefile, TargetName, WorkingSet, Logger);
+				await ExternalExecution.ExecuteHeaderToolIfNecessaryAsync(BuildConfiguration, ProjectFile, Makefile, TargetName, Logger);
 			}
 			
 			GatherExtraGeneratedCPPFileTypes(Makefile, TargetName, ref GlobalCompileEnvironment);
@@ -2832,7 +2932,7 @@ namespace UnrealBuildTool
 				// Create an action which to generate the module receipts
 				if (VersionFile == null)
 				{
-					WriteMetadataTargetInfo TargetInfo = new WriteMetadataTargetInfo(ProjectFile, null, null, ReceiptFileName, Receipt, FileNameToModuleManifest, FileNameToLoadOrderManifest);
+					WriteMetadataTargetInfo TargetInfo = new WriteMetadataTargetInfo(ProjectFile, null, null, ReceiptFileName, Receipt, FileNameToModuleManifest, FileNameToLoadOrderManifest, Rules.bMergeModules);
 					FileReference TargetInfoFile = FileReference.Combine(ProjectIntermediateDirectory, "TargetMetadata.dat");
 					CreateWriteMetadataAction(MakefileBuilder, ReceiptFileName.GetFileName(), TargetInfoFile, TargetInfo, Makefile.OutputItems);
 				}
@@ -2868,12 +2968,12 @@ namespace UnrealBuildTool
 						}
 					}
 
-					WriteMetadataTargetInfo EngineInfo = new WriteMetadataTargetInfo(null, VersionFile, Receipt.Version, null, null, EngineFileToManifest, null);
+					WriteMetadataTargetInfo EngineInfo = new WriteMetadataTargetInfo(null, VersionFile, Receipt.Version, null, null, EngineFileToManifest, null, Rules.bMergeModules);
 					FileReference EngineInfoFile = FileReference.Combine(ProjectIntermediateDirectory, "EngineMetadata.dat");
 					string EngineInfoName = TargetName.Equals(VersionFile.GetFileNameWithoutExtension()) ? VersionFile.GetFileName() : $"{VersionFile.GetFileName()} ({TargetName})";
 					CreateWriteMetadataAction(MakefileBuilder, EngineInfoName, EngineInfoFile, EngineInfo, EnginePrereqItems);
 
-					WriteMetadataTargetInfo TargetInfo = new WriteMetadataTargetInfo(ProjectFile, VersionFile, null, ReceiptFileName, Receipt, TargetFileToManifest, FileNameToLoadOrderManifest);
+					WriteMetadataTargetInfo TargetInfo = new WriteMetadataTargetInfo(ProjectFile, VersionFile, null, ReceiptFileName, Receipt, TargetFileToManifest, FileNameToLoadOrderManifest, Rules.bMergeModules);
 					FileReference TargetInfoFile = FileReference.Combine(ProjectIntermediateDirectory, "TargetMetadata.dat");
 					CreateWriteMetadataAction(MakefileBuilder, ReceiptFileName.GetFileName(), TargetInfoFile, TargetInfo, TargetPrereqItems);
 				}
@@ -2983,6 +3083,14 @@ namespace UnrealBuildTool
 			}
 			Makefile.ExternalDependencies.UnionWith(Makefile.PluginFiles);
 
+			// Track config files
+			Makefile.ExternalDependencies.UnionWith(ConfigCache.ReadHierarchy(ConfigHierarchyType.Engine, Rules.ProjectFile?.Directory, Rules.Platform).FileReferences.Select(FileItem.GetItemByFileReference));
+			Makefile.ExternalDependencies.UnionWith(ConfigCache.ReadHierarchy(ConfigHierarchyType.Game, Rules.ProjectFile?.Directory, Rules.Platform).FileReferences.Select(FileItem.GetItemByFileReference));
+			if (Rules.Type == TargetType.Editor)
+			{
+				Makefile.ExternalDependencies.UnionWith(ConfigCache.ReadHierarchy(ConfigHierarchyType.Editor, Rules.ProjectFile?.Directory, Rules.Platform).FileReferences.Select(FileItem.GetItemByFileReference));
+			}
+
 			// Also track the version file
 			Makefile.ExternalDependencies.Add(FileItem.GetItemByFileReference(BuildVersion.GetDefaultFileName()));
 
@@ -3047,18 +3155,23 @@ namespace UnrealBuildTool
 			}
 
 			HashSet<FileItem> allObjects = new(Binaries.SelectMany(x => x.InputObjects));
+			SortedSet<FileItem> allExis = new(allObjects.Select(x => FileItem.GetItemByFileReference(x.Location.ChangeExtension(".exi"))));
 
 			void CreateStripAction(string Name, UEBuildBinaryType binaryType, IEnumerable< FileItem> toStrip, DirectoryReference IntermediateDirectory)
 			{
-				HashSet<FileItem> otherObjects = new(allObjects.Except(toStrip));
+				SortedSet<FileItem> toStripExis = new(toStrip.Select(x => FileItem.GetItemByFileReference(x.Location.ChangeExtension(".exi"))));
+				SortedSet<FileItem> otherExis = new(allExis);
+				otherExis.ExceptWith(toStripExis);
+
 				FileItem exportsRsp = FileItem.GetItemByFileReference(FileReference.Combine(IntermediateDirectory, $"{Name}.exports.rsp"));
 				string Ext = TargetToolChain.GetExtraLinkFileExtension();
-				FileReference extraObj = FileReference.Combine(IntermediateDirectory, $"{Name}.exports.{Ext}");
+				FileReference outputFile = FileReference.Combine(IntermediateDirectory, $"{Name}.exports.{Ext}");
+
 				IEnumerable<string> arguments =
 				[
-					.. toStrip.Select(path => $"/S:{path.Location.ChangeExtension(".exi")}").OrderBy(x => x),
-					.. otherObjects.Select(path => $"/D:{path.Location.ChangeExtension(".exi")}").OrderBy(x => x),
-					$"/O:{extraObj}",
+					.. toStripExis.Select(path => $"/S:{path}"),
+					.. otherExis.Select(path => $"/D:{path}"),
+					$"/O:{outputFile}",
 					$"/T:{Platform}",
 					$"/M:{Name}",
 					..TargetToolChain.GetExtraLinkFileAdditionalSymbols(binaryType).Select(symbol=> $"/E:{symbol}"),
@@ -3068,9 +3181,9 @@ namespace UnrealBuildTool
 
 				Action exportsAction = MakefileBuilder.CreateAction(ActionType.Link);
 
+				exportsAction.PrerequisiteItems.UnionWith(allExis);
 				exportsAction.PrerequisiteItems.Add(exportsRsp);
-				exportsAction.PrerequisiteItems.UnionWith(allObjects);
-				exportsAction.ProducedItems.Add(FileItem.GetItemByFileReference(extraObj));
+				exportsAction.ProducedItems.Add(FileItem.GetItemByFileReference(outputFile));
 				exportsAction.CommandPath = commandPath;
 				exportsAction.CommandArguments = $"@\"{TargetToolChain.NormalizeCommandLinePath(exportsRsp.Location, CompileEnvironment.RootPaths)}\"";
 				exportsAction.CommandDescription = "GenerateExports";
@@ -3079,6 +3192,7 @@ namespace UnrealBuildTool
 				exportsAction.bCanExecuteRemotely = false; // Can run remotely but is so fast so it would be a waste
 				exportsAction.ArtifactMode = ArtifactMode.Enabled;
 				exportsAction.RootPaths = CompileEnvironment.RootPaths;
+				exportsAction.CacheBucket = ISPCToolChain.GetCacheBucket(Rules, CompileEnvironment);
 
 				Makefile.OutputItems.AddRange(exportsAction.ProducedItems);
 			}
@@ -3375,7 +3489,7 @@ namespace UnrealBuildTool
 			List<string> Definitions = new List<string>(GlobalCompileEnvironment.Definitions);
 			foreach (UEBuildModule Module in Binary.Modules)
 			{
-				Module.AddModuleToCompileEnvironment(null, null, new HashSet<DirectoryReference>(), new HashSet<DirectoryReference>(), new HashSet<DirectoryReference>(), Definitions, new List<UEBuildFramework>(), new List<FileItem>(), false, false);
+				Module.AddModuleToCompileEnvironment(null, null, new HashSet<DirectoryReference>(), new HashSet<DirectoryReference>(), new HashSet<DirectoryReference>(), Definitions, new List<UEBuildFramework>(), new HashSet<FileItem>(), new List<FileItem>(), false, false);
 			}
 
 			// Write the header
@@ -3522,8 +3636,9 @@ namespace UnrealBuildTool
 					}
 				}
 
-				// No non-eninge PerModuleInline files found, Fall back to Core.
-				((UEBuildModuleCPP)Modules["Core"]).bCreatePerModuleFile = true;
+				// No non-engine PerModuleInline files found, fall back to Core or primary module
+				UEBuildModuleCPP module = binary.Modules.OfType<UEBuildModuleCPP>().FirstOrDefault(x => x.Name == "Core") ?? binary.PrimaryModule;
+				module.bCreatePerModuleFile = true;
 			}
 
 			void MergeModulesToDLL(string name, IEnumerable<UEBuildModuleCPP> modules)
@@ -3569,8 +3684,32 @@ namespace UnrealBuildTool
 				}
 			}
 
-			void GetPluginDependencies(UEBuildPlugin plugin, ref HashSet<UEBuildPlugin> dependencies, bool recursively = false)
+			bool CanPluginBeMerged(UEBuildPlugin plugin)
 			{
+				if (Rules.MergePluginsExcluded.Contains(plugin.Name))
+				{
+					return false;
+				}
+				else if (Rules.MergeOnlyGameFeatures)
+				{
+					DirectoryReference gameFeaturesDir = DirectoryReference.Combine(ProjectDirectory, "Plugins", "GameFeatures");
+					return plugin.File.IsUnderDirectory(gameFeaturesDir);
+				}
+				else
+				{
+					return true;
+				}
+			}
+
+			Dictionary<UEBuildPlugin, HashSet<UEBuildPlugin>> globalPluginUserMap = new();
+
+			void GetPluginDependencies(UEBuildPlugin plugin, ref HashSet<UEBuildPlugin> dependencies, bool strictFollowMode = false, bool hasCodeInHierarchy = false)
+			{
+				if (plugin.Modules.Any())
+				{
+					hasCodeInHierarchy = true;
+				}
+
 				foreach (PluginReferenceDescriptor dependency in plugin.Info.Descriptor.Plugins ?? new())
 				{
 					if (!Rules.ShouldIgnorePluginDependency(plugin.Info, dependency))
@@ -3579,13 +3718,20 @@ namespace UnrealBuildTool
 						if (dependentPluginCandidates.Any())
 						{
 							UEBuildPlugin dependentPlugin = dependentPluginCandidates.First();
-							if (!dependencies.Contains(dependentPlugin))
+
+							bool shouldFollowPlugin = (CanPluginBeMerged(dependentPlugin) && !strictFollowMode) || hasCodeInHierarchy;
+
+							if (!dependencies.Contains(dependentPlugin) && shouldFollowPlugin)
 							{
 								dependencies.Add(dependentPlugin);
-								if (recursively)
+
+								if (!globalPluginUserMap.ContainsKey(dependentPlugin))
 								{
-									GetPluginDependencies(dependentPlugin, ref dependencies, recursively);
+									globalPluginUserMap.Add(dependentPlugin, new());
 								}
+								globalPluginUserMap[dependentPlugin].Add(plugin);
+
+								GetPluginDependencies(dependentPlugin, ref dependencies, strictFollowMode, hasCodeInHierarchy);
 							}
 						}
 					}
@@ -3619,69 +3765,6 @@ namespace UnrealBuildTool
 					}
 				}
 			}
-			
-			void HandleSharedLibraries(ref Dictionary<string, HashSet<UEBuildPlugin>> pluginGroups, IReadOnlySet<string> nonRootSharedPlugins)
-			{
-				foreach (KeyValuePair<string, IEnumerable<string>> group in Rules.MergePluginsShared)
-				{
-					// Get the existing groups that will be shared
-					Dictionary<string, HashSet<UEBuildPlugin>> shared = new();
-					foreach (string dependency in group.Value)
-					{
-						if (pluginGroups.TryGetValue(dependency, out HashSet<UEBuildPlugin>? value))
-						{
-							shared.Add(dependency, value);
-						}
-					}
-
-					// Find all plugins that are referenced by more than one group or are forced into the shared set
-					HashSet<UEBuildPlugin> common = new(shared.SelectMany(x => x.Value).Where(x => shared.Count(y => y.Value.Contains(x)) > 1));
-					HashSet<UEBuildPlugin> forced = new();
-					foreach (KeyValuePair<string, HashSet<UEBuildPlugin>> item in shared)
-					{
-						if (nonRootSharedPlugins.Contains(item.Key))
-						{
-							forced.UnionWith(item.Value);
-							pluginGroups.Remove(item.Key);
-						}
-						else
-						{
-							item.Value.ExceptWith(common);
-							pluginGroups.Remove(item.Key);
-							pluginGroups.Add(item.Key, item.Value);
-						}
-					}
-
-					common.UnionWith(forced);
-					pluginGroups.Add(group.Key, common);
-				}
-			}
-
-			void RemoveNonExclusivePlugins(ref Dictionary<string, HashSet<UEBuildPlugin>> pluginGroups, ref HashSet<UEBuildPlugin> conflictingPlugins)
-			{
-				if (pluginGroups.Any())
-				{
-					HashSet<UEBuildPlugin> commonPluginDependencies = new();
-					foreach (KeyValuePair<string, HashSet<UEBuildPlugin>> item in pluginGroups)
-					{
-						IEnumerable<UEBuildPlugin> otherPluginDependencies = pluginGroups
-							.Where(x => x.Key != item.Key)       // get other groups
-							.SelectMany(x => x.Value)            // get plugins
-							.Distinct()                          // unique
-							.Where(x => item.Value.Contains(x)); // that are shared here
-
-						commonPluginDependencies.UnionWith(otherPluginDependencies);
-						conflictingPlugins.UnionWith(otherPluginDependencies);
-					}
-
-					Dictionary<string, HashSet<UEBuildPlugin>> filtered = new();
-					foreach (KeyValuePair<string, HashSet<UEBuildPlugin>> item in pluginGroups)
-					{
-						filtered.Add(item.Key, new(item.Value.Except(commonPluginDependencies)));
-					}
-					pluginGroups = filtered;
-				}
-			}
 
 			UEBuildBinary executableBinary = Binaries[0];
 			executableBinary.bAllowExports = true; // Need to export symbols because other binaries might depend on this. (They will be stripped anyway if not used)
@@ -3692,122 +3775,151 @@ namespace UnrealBuildTool
 			if (Rules.MergePlugins.Any() && BuildPlugins != null)
 			{
 				// Dependency rules:
-				// - Regular (non-shared) merged libraries cannot contain plugins that are dependencies of outside plugins.
+				// - Regular (non-shared) merged libraries cannot contain plugins that are dependencies of other merged libraries.
 				// - Regular (non-shared) merged libraries can depend on any number of shared merged libraries.
-				// - Shared merged libraries cannot have dependencies at all (other than the base executable) to avoid circularity.
-				// - Plugins that are part of no merged library (shared or not) will be pulled into the executable *with their dependencies*, so they should be minimized.
+				// - Shared merged libraries cannot have dependencies other than the base executable to avoid circularity.
+				// - Plugins that are part of no merged library will be pulled into the executable *with their dependencies*, so they should be minimized.
 				// - Some plugins are organizational in nature and should be ignored for dependencies.
 
-				// Syntax
+				// Config setup:
 				// - Rules.MergePlugin represents merged libraries: everything in that plugin, direct plugin dependencies and dependent modules.
 				// - Rules.MergePluginsShared represents shared merged libraries: same as above, except it's a list of plugins, and plugins in a merged library are excluded.
-				// - Rules.MergePluginsIgnored: explicitly ignored plugins.
+				// - Rules.MergePluginsIgnored: plugins ignored during the merging process.
+				// - Rules.MergePluginsExcluded: plugins explicitly removed from all merged libraries.
 
-				// Shared merged libraries hold modules that are common to at least two in a list of root GFPs.
-				// If an entry for a shared merged library isn't also defined as a root, it'll be fully merged into the shared.
-				HashSet<string> nonRootSharedPlugins = Rules.MergePluginsShared.SelectMany(x => x.Value).Except(Rules.MergePlugins).ToHashSet();
-				IEnumerable<string> mergedPlugins = Rules.MergePlugins.Union(nonRootSharedPlugins);
-				IEnumerable<string> sharedPlugins = nonRootSharedPlugins.Where(plugin => Rules.MergePluginsShared.SelectMany(x => x.Value).Where(x => x == plugin).Count() > 1);
-				nonRootSharedPlugins.ExceptWith(sharedPlugins);
-
-				// Find the plugins to merge and gather their direct dependencies
 				Dictionary<string, HashSet<UEBuildPlugin>> pluginGroups = new();
-				foreach (string name in mergedPlugins)
+				Dictionary<string, HashSet<UEBuildPlugin>> pluginGroupDependencies = new();
+
+				// We want the ability to add entire root GFPs to a shared library without a separate dedicated library.
+				// If there's a sharing rule but no root library, we'll add a fake root here, and later on remap its contents to the shared one.
+				List<string> rootPluginsToMerge = new();
+				Dictionary<string, string> rootPluginRemappings = new();
+				foreach (string name in Rules.MergePlugins)
+				{
+					rootPluginsToMerge.Add(name);
+				}
+				foreach (KeyValuePair<string, IEnumerable<string>> sharedGroupRule in Rules.MergePluginsShared)
+				{
+					foreach (string name in sharedGroupRule.Value)
+					{
+						if (!Rules.MergePlugins.Contains(name))
+						{
+							rootPluginsToMerge.Add(name);
+							rootPluginRemappings.Add(name, sharedGroupRule.Key);
+						}
+					}
+				}
+
+				// When processing root GFPs, we add the plugin and direct dependencies to a plugin group.
+				// Groups will then be expanded with indirect dependencies.
+				foreach (string name in rootPluginsToMerge)
 				{
 					UEBuildPlugin? plugin = BuildPlugins.FirstOrDefault(x => x.Name == name);
 					if (plugin == null)
 					{
-						Logger.LogWarning("Plugin {Name} not found in BuildPlugins and will not be merged", name);
-						continue;
+						Logger.LogInformation("{Name}: setup for merging but not built", name);
 					}
-					HashSet<UEBuildPlugin> needed = new();
-					needed.Add(plugin);
-					GetPluginDependencies(plugin, ref needed);
-					pluginGroups.Add(plugin.Name, needed);
+					else if (CanPluginBeMerged(plugin))
+					{
+						HashSet<UEBuildPlugin> self = new HashSet<UEBuildPlugin> { plugin };
+						HashSet<UEBuildPlugin> dependencies = new();
+						GetPluginDependencies(plugin, ref dependencies, false);
+
+						pluginGroups.Add(name, self);
+						pluginGroupDependencies.Add(name, dependencies);
+
+						Logger.LogInformation("{Name}: setup for merging with {0} total dependencies", name, dependencies.Count());
+					}
 				}
 
-				// For each group, find out plugin dependencies that would make sense to also merge
-				Dictionary<string, HashSet<UEBuildPlugin>> desiredPluginGroups = new();
-				foreach (KeyValuePair<string, HashSet<UEBuildPlugin>> item in pluginGroups)
+				// Set up shared dynamic libraries with an empty group
+				foreach (KeyValuePair<string, IEnumerable<string>> sharedGroupRule in Rules.MergePluginsShared)
 				{
-					HashSet<UEBuildPlugin> desired = new();
-					foreach (UEBuildPlugin plugin in item.Value)
+					pluginGroups.Add(sharedGroupRule.Key, new());
+				}
+
+				// Expand dependencies from the roots
+				HashSet<UEBuildPlugin> seenPlugins = new();
+				foreach (KeyValuePair<string, HashSet<UEBuildPlugin>> group in pluginGroups)
+				{
+					void AddPluginToGroup(UEBuildPlugin plugin, string groupName)
 					{
-						if (!desiredPluginGroups.ContainsKey(plugin.Name))
+						Logger.LogDebug("{0}: added to plugin group {1}", plugin.Name, groupName);
+
+						pluginGroups[groupName].Add(plugin);
+
+						if (plugin.Dependencies != null)
 						{
-							GetPluginDependencies(plugin, ref desired, true);
+							ProcessPluginsRecursively(groupName, plugin.Dependencies);
 						}
 					}
-					desiredPluginGroups.Add(item.Key, desired);
-				}
 
-				// Move common plugins to a new group and then remove duplicates
-				HashSet<UEBuildPlugin> conflictingPlugins = new();
-				HandleSharedLibraries(ref pluginGroups, nonRootSharedPlugins);
-				RemoveNonExclusivePlugins(ref pluginGroups, ref conflictingPlugins);
-
-				// Merge secondary dependencies into their owning set
-				HandleSharedLibraries(ref desiredPluginGroups, nonRootSharedPlugins);
-				RemoveNonExclusivePlugins(ref desiredPluginGroups, ref conflictingPlugins);
-
-				// Merge remaining secondary dependencies into primaries
-				foreach (string group in pluginGroups.Keys.ToArray())
-				{
-					if (desiredPluginGroups.TryGetValue(group, out HashSet<UEBuildPlugin>? value))
+					void ProcessPluginsRecursively(string groupName, HashSet<UEBuildPlugin> plugins)
 					{
-						pluginGroups[group].UnionWith(value);
-					}
-				}
-
-				// Find remaining unmerged plugins
-				IEnumerable<UEBuildPlugin> ignoredPlugins = BuildPlugins.Where(x => Rules.MergePluginsIgnored.Contains(x.Name));
-				HashSet<UEBuildPlugin> unmergablePlugins = BuildPlugins.Except(ignoredPlugins).Except(pluginGroups.SelectMany(x => x.Value)).ToHashSet();
-
-				// For all unreferenced plugins, attempt to merge them through their dependencies
-				for (int unreferencedPhaseIndex = 0; unreferencedPhaseIndex < 3; unreferencedPhaseIndex++)
-				{
-					Logger.LogInformation("Unreferenced phase {unreferencedPhaseIndex}", unreferencedPhaseIndex);
-
-					// For all unreferenced plugins, attempt to merge them through their dependencies
-					foreach (UEBuildPlugin plugin in unmergablePlugins)
-					{
-						if (!pluginGroups.SelectMany(x => x.Value).Contains(plugin))
+						foreach (UEBuildPlugin plugin in plugins)
 						{
-							HashSet<UEBuildPlugin> dependencies = new();
-							GetPluginDependencies(plugin, ref dependencies);
-
-							if (dependencies.Count() > 0)
+							if (!seenPlugins.Contains(plugin) && CanPluginBeMerged(plugin))
 							{
-								string? foundPluginGroup = pluginGroups.FirstOrDefault(x => x.Value.Intersect(dependencies).Count() == dependencies.Count()).Key;
+								seenPlugins.Add(plugin);
 
-								if (foundPluginGroup != null)
+								IEnumerable<string> groupsWithPlugin = pluginGroupDependencies.Where(x => x.Value.Contains(plugin)).Select(x => x.Key);
+
+								// Plugin is unique to this group
+								if (groupsWithPlugin.Count() == 1)
 								{
-									Logger.LogInformation("{0}: was unreferenced but will be merged with {1}", plugin.Name, foundPluginGroup);
-									pluginGroups[foundPluginGroup].Add(plugin);
-									pluginGroups[foundPluginGroup].UnionWith(dependencies);
+									AddPluginToGroup(plugin, groupName);
+								}
+
+								// Plugin is shared
+								else
+								{
+									IEnumerable<KeyValuePair<string, IEnumerable<string>>> sharedGroupCandidates =
+										Rules.MergePluginsShared.Where(x => x.Value.Intersect(groupsWithPlugin).Count() == groupsWithPlugin.Count());
+
+									if (sharedGroupCandidates.Any())
+									{
+										sharedGroupCandidates.OrderBy(x => x.Value.Count()).Reverse();
+										KeyValuePair<string, IEnumerable<string>> sharedGroupRule = sharedGroupCandidates.First();
+
+										AddPluginToGroup(plugin, sharedGroupRule.Key);
+									}
+									else
+									{
+										Logger.LogDebug("{0}: unmergeable", plugin.Name);
+									}
 								}
 							}
 						}
 					}
+
+					// There's only one entry here at this point
+					HashSet<UEBuildPlugin>? dependencies = group.Value.FirstOrDefault()?.Dependencies;
+					if (dependencies != null)
+					{
+						ProcessPluginsRecursively(group.Key, dependencies);
+					}
 				}
-				unmergablePlugins.ExceptWith(pluginGroups.SelectMany(x => x.Value));
+
+				// Process the remapping rules for fully shared root GFPs.
+				foreach (KeyValuePair<string, string> remapping in rootPluginRemappings)
+				{
+					string source = remapping.Key;
+					string destination = remapping.Value;
+
+					pluginGroups[destination].UnionWith(pluginGroups[source]);
+					pluginGroups.Remove(source);
+				}
 
 				// At this point, we have to exclude any code that falls under remaining unmergeable plugins, dependencies included.
 				// We need that because there is no way the executable can depend on a merged library, and this remaining chunk would always be loaded as its own library.
+				IEnumerable<UEBuildPlugin> ignoredPlugins = BuildPlugins.Where(x => Rules.MergePluginsIgnored.Contains(x.Name));
+				HashSet<UEBuildPlugin> unmergablePlugins = BuildPlugins.Except(ignoredPlugins).Except(pluginGroups.SelectMany(x => x.Value)).ToHashSet();
+				unmergablePlugins.UnionWith(BuildPlugins.Where(x => Rules.MergePluginsExcluded.Contains(x.Name)));
 
 				// Update unmergeable plugins by accounting for their dependencies
 				Dictionary<UEBuildPlugin, HashSet<string>> unmergeablePluginDependencies = new();
 				foreach (UEBuildPlugin plugin in unmergablePlugins)
 				{
-					if (conflictingPlugins.Contains(plugin))
-					{
-						Logger.LogInformation("{0}: unmergeable as a conflicted plugin", plugin.Name);
-					}
-					else
-					{
-						Logger.LogInformation("{0}: unmergeable as an unreferenced plugin", plugin.Name);
-					}
-
 					HashSet<UEBuildPlugin> dependencies = new();
 					GetPluginDependencies(plugin, ref dependencies, true);
 
@@ -3830,11 +3942,15 @@ namespace UnrealBuildTool
 				unmergablePlugins = new(unmergablePlugins.Union(unmergeablePluginDependencies.Keys));
 				foreach (KeyValuePair<UEBuildPlugin, HashSet<string>> dependency in unmergeablePluginDependencies)
 				{
-					if (dependency.Key.Modules.Any())
+					if (CanPluginBeMerged(dependency.Key))
 					{
-						Logger.LogInformation("{0}: unmergeable as a dependency of: {1}", dependency.Key, string.Join(",", dependency.Value));
+						if (dependency.Key.Modules.Any())
+						{
+							Logger.LogDebug("{0}: unmergeable (dependency of: {1})", dependency.Key, string.Join(",", dependency.Value));
+						}
 					}
 				}
+
 				Logger.LogInformation("Found a total of {0} plugins to merge", pluginGroups.SelectMany(x => x.Value).Count());
 
 				// Remove unmergable plugin modules from plugin modules and create a set of all plugin modules
@@ -3856,6 +3972,52 @@ namespace UnrealBuildTool
 				HashSet<UEBuildModuleCPP> allLeftoverDependencies = new HashSet<UEBuildModuleCPP>();
 				GetModulesDependenciesRecursively(allLeftoverModules.OfType<UEBuildModuleCPP>(), ref allLeftoverDependencies);
 
+				Dictionary<string, IEnumerable<ModuleRules>> moduleGroups = new();
+				Dictionary<string, Dictionary<string, List<string>>> rootPluginUsageMap = new();
+				if (Rules.bReportModuleMergingData)
+				{ 
+					// prepare the merged modules group data for validation by the game
+					moduleGroups.Add("", allLeftoverDependencies.Select(x => x.Rules));
+					foreach (UEBuildModuleCPP module in allLeftoverDependencies)
+					{
+						IEnumerable<UEBuildPlugin> pluginCandidates = BuildPlugins.Where(x => x.Modules.Contains(module));
+						if (pluginCandidates.Any())
+						{
+							List<string> userNames = new();
+							UEBuildPlugin plugin = pluginCandidates.First();
+
+							void FindRootUsers(UEBuildPlugin plugin, ref Dictionary<string, List<string>> roots, List<string> path)
+							{
+								List<string> newPath = new(path);
+								newPath.Add(plugin.Name);
+
+								if (globalPluginUserMap.ContainsKey(plugin))
+								{
+									foreach (UEBuildPlugin user in globalPluginUserMap[plugin])
+									{
+										FindRootUsers(user, ref roots, newPath);
+									}
+								}
+								else
+								{
+									if (!roots.ContainsKey(plugin.Name))
+									{
+										roots.Add(plugin.Name, newPath);
+									}
+									else if (path.Count() < roots[plugin.Name].Count())
+									{
+										roots[plugin.Name] = newPath;
+									}
+								}
+							}
+
+							Dictionary<string, List<string>> roots = new();
+							FindRootUsers(plugin, ref roots, new());
+							rootPluginUsageMap.Add(module.Name, roots);
+						}
+					}
+				}
+
 				// Remove all leftover dependencies from plugin modules
 				// then remove remaining plugin modules from all modules set
 				// then merge the module into a binary and update plugin modules in all modules to that binary
@@ -3866,13 +4028,56 @@ namespace UnrealBuildTool
 
 					pluginModules.ExceptWith(allLeftoverDependencies);
 					allModules.ExceptWith(pluginModules);
+					moduleGroups.Add(item.Key, pluginModules.Select(x => x.Rules));
 
 					ConsumeModules(item.Key, pluginModules);
 				}
+
+				if (Rules.bReportModuleMergingData)
+				{
+					Rules.ReportMergedModules(moduleGroups, rootPluginUsageMap);
+				}
 			}
-			
+
+			List<UEBuildModuleCPP> engineModules = [];
+			HashSet<UEBuildModuleCPP> excludedModules = [];
+
+			// Collect engine modules and find the ones that are explicitly moved to common
+			foreach (UEBuildModuleCPP m in allModules)
+			{
+				if (!m.RulesFile.IsUnderDirectory(Unreal.EngineDirectory))
+				{
+					continue;
+				}
+				if (Rules.MergeAdditionalCommonModules.Contains(m.Name))
+				{
+					excludedModules.Add(m);
+				}
+				else
+				{
+					engineModules.Add(m);
+				}
+			}
+
+			// Find all the engine modules that depends on the ones that was moved to common and move them too
+			if (excludedModules.Count != 0)
+			{
+				while (engineModules.RemoveAll((m) =>
+				{
+					foreach (UEBuildModule m2 in m.PublicDependencyModules!.Union(m.PrivateDependencyModules!))
+					{
+						if (!excludedModules.Contains(m2))
+						{
+							continue;
+						}
+						excludedModules.Add(m);
+						return true;
+					}
+					return false;
+				}) != 0) ;
+			}
+
 			// Merge remaining engine modules
-			IEnumerable<UEBuildModuleCPP> engineModules = allModules.Where(x => x.RulesFile.IsUnderDirectory(Unreal.EngineDirectory));
 			ConsumeModules("Engine", engineModules);
 
 			// Merge remaining modules to common set
@@ -3884,7 +4089,7 @@ namespace UnrealBuildTool
 			Binaries.RemoveAll(x => !x.Modules.Any());
 
 			// Set module that should pull in PerModuleInline file
-			Binaries.ForEach(binary => SetPerModuleInline(binary));
+			Binaries.ForEach(SetPerModuleInline);
 		}
 
 		/// <summary>
@@ -4423,9 +4628,14 @@ namespace UnrealBuildTool
 						continue;
 					}
 
-					Type RulesType = RulesAssembly.GetModuleRulesType(ModuleName)!;
+					Type? RulesType = RulesAssembly.GetModuleRulesType(ModuleName);
 
-					if (!ModuleRules.IsValidForTarget(RulesType, Rules, out string? InvalidReason))
+					if (RulesType == null)
+					{
+						Logger.LogDebug("Excluding module {Module}: Unable to get module rules type from rules assemblies", ModuleName);
+						continue;
+					}
+					else if (!ModuleRules.IsValidForTarget(RulesType, Rules, out string? InvalidReason))
 					{
 						Logger.LogDebug("Excluding module {Module}: Does not support {InvalidReason}", ModuleName, InvalidReason);
 						continue;
@@ -4483,15 +4693,20 @@ namespace UnrealBuildTool
 				// Add all the modules
 				foreach (ModuleDescriptor ModuleDescriptor in Plugin.Descriptor.Modules)
 				{
-					if (ModuleDescriptor.IsCompiledInConfiguration(Platform, Configuration, TargetName, TargetType, Rules.bBuildDeveloperTools, Rules.bBuildRequiresCookedData))
+					if (ModuleDescriptor.IsCompiledInConfiguration(Platform, Configuration, TargetName, TargetType, Rules.bBuildDeveloperTools, Rules.bBuildRequiresCookedData, Architectures))
 					{
 						FileReference? ModuleFileName = RulesAssembly.GetModuleFileName(ModuleDescriptor.Name);
 						if (ModuleFileName == null)
 						{
 							throw new BuildException("Unable to find module '{0}' referenced by {1}", ModuleDescriptor.Name, Plugin.File);
 						}
-						Type RulesType = RulesAssembly.GetModuleRulesType(ModuleDescriptor.Name)!;
-						if (!ModuleRules.IsValidForTarget(RulesType, Rules, out string? InvalidReason))
+						Type? RulesType = RulesAssembly.GetModuleRulesType(ModuleDescriptor.Name);
+						if (RulesType == null)
+						{
+							Logger.LogDebug("Excluding plugin {Plugin} module {Module}: Unable to get module rules type from rules assemblies", Plugin.Name, ModuleDescriptor.Name);
+							continue;
+						}
+						else if (!ModuleRules.IsValidForTarget(RulesType, Rules, out string? InvalidReason))
 						{
 							Logger.LogDebug("Excluding plugin {Plugin} module {Module}: Does not support {InvalidReason}", Plugin.Name, ModuleDescriptor.Name, InvalidReason);
 							continue;
@@ -4864,7 +5079,7 @@ namespace UnrealBuildTool
 				return;
 			}
 
-			foreach (ModuleDescriptor Descriptor in ProjectDescriptor.Modules.Where(x => x.IsCompiledInConfiguration(Platform, Configuration, TargetName, TargetType, Rules.bBuildDeveloperTools, Rules.bBuildRequiresCookedData)))
+			foreach (ModuleDescriptor Descriptor in ProjectDescriptor.Modules.Where(x => x.IsCompiledInConfiguration(Platform, Configuration, TargetName, TargetType, Rules.bBuildDeveloperTools, Rules.bBuildRequiresCookedData, Architectures)))
 			{
 				// To maintain historical behavior any project modules that do not specifically list the program in the ProgramAllowList will not be added even if IsCompiledInConfiguration returns true
 				if (Rules.Type == TargetType.Program && (Descriptor.ProgramAllowList == null || !Descriptor.ProgramAllowList.Contains(AppName)))
@@ -5246,7 +5461,7 @@ namespace UnrealBuildTool
 				{
 					foreach (ModuleDescriptor ModuleInfo in Info.Descriptor.Modules)
 					{
-						if (ModuleInfo.IsCompiledInConfiguration(Platform, Configuration, TargetName, TargetType, Rules.bBuildDeveloperTools, Rules.bBuildRequiresCookedData))
+						if (ModuleInfo.IsCompiledInConfiguration(Platform, Configuration, TargetName, TargetType, Rules.bBuildDeveloperTools, Rules.bBuildRequiresCookedData, Architectures))
 						{
 							UEBuildModuleCPP Module = FindOrCreateCppModuleByName(ModuleInfo.Name, PluginReferenceChain, Logger);
 							if (!Instance.Modules.Contains(Module))
@@ -5527,7 +5742,6 @@ namespace UnrealBuildTool
 			GlobalLinkEnvironment.bPGOOptimize = Rules.bPGOOptimize;
 			GlobalLinkEnvironment.bPGOProfile = Rules.bPGOProfile;
 			GlobalLinkEnvironment.bUseIncrementalLinking = Rules.bUseIncrementalLinking;
-			GlobalLinkEnvironment.bUseFastPDBLinking = Rules.bUseFastPDBLinking ?? false;
 			GlobalLinkEnvironment.bDeterministic = Rules.bDeterministic;
 			GlobalLinkEnvironment.bPrintTimingInfo = Rules.bPrintToolChainTimingInfo;
 			GlobalLinkEnvironment.bUsePIE = Rules.bEnablePIE;
@@ -5633,7 +5847,7 @@ namespace UnrealBuildTool
 			GlobalCompileEnvironment.Definitions.Add("__UNREAL__");
 
 			GlobalCompileEnvironment.Definitions.Add(String.Format("IS_MONOLITHIC={0}", ShouldCompileMonolithic() ? "1" : "0"));
-			GlobalCompileEnvironment.Definitions.Add(String.Format("IS_MERGEDMODULES={0}", Rules.bMergeModules ? "1" : "0"));
+			GlobalCompileEnvironment.Definitions.Add(String.Format("UE_MERGED_MODULES={0}", Rules.bMergeModules ? "1" : "0"));
 
 			GlobalCompileEnvironment.Definitions.Add(String.Format("WITH_ENGINE={0}", Rules.bCompileAgainstEngine ? "1" : "0"));
 			GlobalCompileEnvironment.Definitions.Add(String.Format("WITH_UNREAL_DEVELOPER_TOOLS={0}", Rules.bBuildDeveloperTools ? "1" : "0"));
@@ -5656,6 +5870,15 @@ namespace UnrealBuildTool
 			else
 			{
 				GlobalCompileEnvironment.Definitions.Add("WITH_COREUOBJECT=0");
+			}
+
+			if (Rules.bEnableConstInitUObject)
+			{
+				GlobalCompileEnvironment.Definitions.Add("UE_WITH_CONSTINIT_UOBJECT=1");
+			}
+			else
+			{
+				GlobalCompileEnvironment.Definitions.Add("UE_WITH_CONSTINIT_UOBJECT=0");
 			}
 
 			if (Rules.bEnableTrace)
@@ -5887,18 +6110,6 @@ namespace UnrealBuildTool
 				GlobalCompileEnvironment.Definitions.Add("WITH_CPP_MODULES=0");
 			}
 
-			// Whether C++20 coroutines are enabled
-			if (Rules.bEnableCppCoroutinesForEvaluation)
-			{
-				Log.TraceInformationOnce($"NOTE: C++ coroutine support is considered experimental and should be used for evaluation purposes only ({nameof(TargetRules.bEnableCppCoroutinesForEvaluation)})");
-				GlobalCompileEnvironment.Definitions.Add("WITH_CPP_COROUTINES=1");
-				GlobalCompileEnvironment.bEnableCoroutines = true;
-			}
-			else
-			{
-				GlobalCompileEnvironment.Definitions.Add("WITH_CPP_COROUTINES=0");
-			}
-
 			if (Rules.bEnableProcessPriorityControl)
 			{
 				GlobalCompileEnvironment.Definitions.Add("WITH_PROCESS_PRIORITY_CONTROL=1");
@@ -5906,6 +6117,15 @@ namespace UnrealBuildTool
 			else
 			{
 				GlobalCompileEnvironment.Definitions.Add("WITH_PROCESS_PRIORITY_CONTROL=0");
+			}
+
+			if (Rules.bDefineForceInlineHintToInline)
+			{
+				GlobalCompileEnvironment.Definitions.Add("UE_DEFINE_FORCEINLINE_HINT_TO_INLINE=1");
+			}
+			else
+			{
+				GlobalCompileEnvironment.Definitions.Add("UE_DEFINE_FORCEINLINE_HINT_TO_INLINE=0");
 			}
 
 			// Define the custom config if specified, this should not be set in an editor build
@@ -5928,6 +6148,7 @@ namespace UnrealBuildTool
 			// tell the compiled code the name of the UBT platform (this affects folder on disk, etc that the game may need to know)
 			GlobalCompileEnvironment.Definitions.Add(String.Format("UBT_COMPILED_PLATFORM=" + Platform.ToString()));
 			GlobalCompileEnvironment.Definitions.Add(String.Format("UBT_COMPILED_TARGET=" + TargetType.ToString()));
+			GlobalCompileEnvironment.Definitions.Add(String.Format("UBT_COMPILED_ARCHITECTURE=" + (Architectures.bIsMultiArch ? "MULTI" : Architectures.SingleArchitecture.ToString().ToLower()) ));
 
 			// Set the global app name
 			GlobalCompileEnvironment.Definitions.Add(String.Format("UE_APP_NAME=\"{0}\"", AppName));
@@ -6117,17 +6338,6 @@ namespace UnrealBuildTool
 					RulesObject.bUsePrecompiled = false;
 				}
 
-				// Force source compilation for Switch PlatformCrypto modules. SDK 21 changes nn::crypto
-				// symbols, and stale installed-build objects from the engine plugin are not compatible.
-				if (Platform == UnrealTargetPlatform.Switch
-					&& (ModuleName.Equals("PlatformCrypto", StringComparison.OrdinalIgnoreCase)
-						|| ModuleName.Equals("PlatformCryptoTypes", StringComparison.OrdinalIgnoreCase)
-						|| ModuleName.Equals("PlatformCryptoContext", StringComparison.OrdinalIgnoreCase)))
-				{
-					RulesObject.bUsePrecompiled = false;
-					RulesObject.bPrecompile = false;
-				}
-
 				// Get the base directory for paths referenced by the module. If the module's under the UProject source directory use that, otherwise leave it relative to the Engine source directory.
 				if (ProjectFile != null)
 				{
@@ -6215,6 +6425,14 @@ namespace UnrealBuildTool
 				// exposing information about the platform in publicly accessible
 				// locations.
 				UEBuildPlatform.PlatformModifyHostModuleRules(ModuleName, RulesObject, Rules);
+
+				// If there are files to generate for module, then we have to create Gen directory and add it as public include
+				if (RulesObject.FilesToGenerate.Count != 0)
+				{
+					DirectoryReference GenDir = DirectoryReference.Combine(GetModuleIntermediateDirectory(RulesObject, Architectures), "Gen");
+					DirectoryReference.CreateDirectory(GenDir);
+					RulesObject.PublicIncludePaths.Add(NormalizeIncludePath(GenDir));
+				}
 
 				// Now, go ahead and create the module builder instance
 				Module = InstantiateModule(RulesObject, GeneratedCodeDirectory, Logger);
