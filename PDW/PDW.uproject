@@ -100,6 +100,13 @@
 			"Enabled": true
 		},
 		{
+			"Name": "StreamPlay",
+			"Enabled": true,
+			"PlatformAllowList": [
+				"Switch2"
+			]
+		},
+		{
 			"Name": "GeometryScripting",
 			"Enabled": true
 		},

@@ -429,7 +429,7 @@ void UPDWRemappingWidget::ChangeBinding(FKey InKey)
 	ActionsAlreadyMappedWithNewKey.Empty();
 	ActionsAlreadyMappedWithOldKey.Empty();
 	// Apply to default user settings
-	UEnhancedPlayerMappableKeyProfile* DefaultProfile = UserSettings->GetCurrentKeyProfile();
+	UEnhancedPlayerMappableKeyProfile* DefaultProfile = UserSettings->GetActiveKeyProfile();
 	DefaultProfile->GetMappingNamesForKey(NewKey, ActionsAlreadyMappedWithNewKey); // should be always 1 profile if the game is not super complex
 	DefaultProfile->GetMappingNamesForKey(OldKey, ActionsAlreadyMappedWithOldKey); // should be always 1 profile if the game is not super complex
 

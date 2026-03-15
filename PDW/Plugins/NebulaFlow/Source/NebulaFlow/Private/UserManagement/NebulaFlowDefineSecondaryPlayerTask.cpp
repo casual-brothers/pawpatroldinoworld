@@ -65,13 +65,17 @@ void UNebulaFlowDefineSecondaryPlayerTask::ExecutionImplementation()
 		{
 			// Show the account picker.
 			const auto ExternalUI = UNebulaFlowCoreFunctionLibrary::GetOnlineSubsytem()->GetExternalUIInterface();
-			ExternalUI->SetAllowGuest(true);
 			if (ExternalUI.IsValid())
 			{
+#if PLATFORM_XBOXONE || PLATFORM_XSX || PLATFORM_WINGDK
+				ExternalUI->SetAllowGuest(true);
+#endif
 				ExternalUI->ShowLoginUI(UserIndex, false, true, FOnLoginUIClosedDelegate::CreateUObject(this, &ThisClass::HandleLoginUIClosed));
 				bSkipForward = false;
+#if PLATFORM_XBOXONE || PLATFORM_XSX || PLATFORM_WINGDK
+				ExternalUI->SetAllowGuest(false);
+#endif
 			}
-			ExternalUI->SetAllowGuest(false);
 		}
 	}
 

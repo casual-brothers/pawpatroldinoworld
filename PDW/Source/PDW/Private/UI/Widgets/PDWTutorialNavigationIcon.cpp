@@ -250,6 +250,8 @@ EControllerConfiguration UPDWTutorialNavigationIcon::CheckCurrentConfiguration()
 	}
 	return EControllerConfiguration::Switch_Handheld;
 #endif
+
+	return EControllerConfiguration::Microsoft;
 }
 
 void UPDWTutorialNavigationIcon::InitKeys()
