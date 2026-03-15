@@ -97,7 +97,17 @@
 		},
 		{
 			"Name": "FMODStudio",
-			"Enabled": true
+			"Enabled": true,
+			"PlatformDenyList": [
+				"Switch2"
+			]
+		},
+		{
+			"Name": "FMODStudioSwitch2Stub",
+			"Enabled": true,
+			"PlatformAllowList": [
+				"Switch2"
+			]
 		},
 		{
 			"Name": "StreamPlay",
@@ -164,7 +174,10 @@
 		},
 		{
 			"Name": "FMODStudioNiagara",
-			"Enabled": true
+			"Enabled": true,
+			"PlatformDenyList": [
+				"Switch2"
+			]
 		},
 		{
 			"Name": "BinkMedia",

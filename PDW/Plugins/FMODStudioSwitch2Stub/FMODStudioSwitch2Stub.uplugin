@@ -1,0 +1,25 @@
+{
+	"FileVersion": 3,
+	"FriendlyName": "FMOD Studio Switch2 Stub",
+	"Version": 1,
+	"VersionName": "1.0.0",
+	"CreatedBy": "OpenAI",
+	"Description": "Temporary FMODStudio stub used to compile Switch2 builds without FMOD platform libraries.",
+	"Category": "Audio",
+	"EnabledByDefault": false,
+	"CanContainContent": false,
+	"Installed": false,
+	"SupportedTargetPlatforms": [
+		"Switch2"
+	],
+	"Modules": [
+		{
+			"Name": "FMODStudio",
+			"Type": "Runtime",
+			"LoadingPhase": "PreDefault",
+			"PlatformAllowList": [
+				"Switch2"
+			]
+		}
+	]
+}
