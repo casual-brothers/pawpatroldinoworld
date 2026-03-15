@@ -26,7 +26,17 @@
 	"Plugins": [
 		{
 			"Name": "FModStudio",
-			"Enabled": true
+			"Enabled": true,
+			"PlatformDenyList": [
+				"Switch2"
+			]
+		},
+		{
+			"Name": "FMODStudioSwitch2Stub",
+			"Enabled": true,
+			"PlatformAllowList": [
+				"Switch2"
+			]
 		},
 		{
 			"Name": "OnlineSubsystem",
@@ -34,6 +44,10 @@
 		},
 		{
 			"Name": "OnlineSubsystemUtils",
+			"Enabled": true
+		},
+		{
+			"Name": "EnhancedInput",
 			"Enabled": true
 		}
 

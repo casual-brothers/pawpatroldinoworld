@@ -31,5 +31,19 @@
 			"Flow"
 			]
 		}
+	],
+	"Plugins": [
+		{
+			"Name": "Flow",
+			"Enabled": true
+		},
+		{
+			"Name": "FlowQuest",
+			"Enabled": true
+		},
+		{
+			"Name": "EnhancedInput",
+			"Enabled": true
+		}
 	]
 }

@@ -45,8 +45,22 @@
 			"Enabled": true
 		},
 		{
-			"Name": "FMODStudio",
+			"Name": "NebulaGameplay",
 			"Enabled": true
+		},
+		{
+			"Name": "FMODStudio",
+			"Enabled": true,
+			"PlatformDenyList": [
+				"Switch2"
+			]
+		},
+		{
+			"Name": "FMODStudioSwitch2Stub",
+			"Enabled": true,
+			"PlatformAllowList": [
+				"Switch2"
+			]
 		}
 	]
 }
