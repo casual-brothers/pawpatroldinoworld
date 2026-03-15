@@ -4,7 +4,7 @@
 
 #include "Asset/FlowObjectDiff.h"
 #include "DiffResults.h"
-#include "Editor/Kismet/Private/DiffControl.h"
+#include "DiffControl.h"
 
 class FBlueprintDifferenceTreeEntry;
 class SFlowDiff;

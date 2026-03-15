@@ -7,6 +7,7 @@
 #include "NebulaFlowBaseWidget.h"
 #include "Input/NavigationReply.h"
 #include "Components/Button.h"
+#include "Engine/LocalPlayer.h"
 #include "NebulaFlowBaseButton.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnButtonFocused, UNebulaFlowBaseButton*, BaseButton);
@@ -100,15 +101,18 @@ public:
 		bool GetButtonIsFocusable() { return Button->GetIsFocusable(); };
 		
 	UFUNCTION()
-		void SetButtonIsHoverable(bool IsButtonHoverable) { Button->IsHoverable = IsButtonHoverable; };
+		void SetButtonIsHoverable(bool IsButtonHoverable) { bIsButtonHoverable = IsButtonHoverable; };
 
 	UFUNCTION()
-		bool GetButtonIsHoverable() { return Button->IsHoverable; };
+		bool GetButtonIsHoverable() { return bIsButtonHoverable; };
 
 protected:
 
 	UPROPERTY(BlueprintReadWrite, meta = (BindWidget))
 		UButton* Button = nullptr;
+
+	UPROPERTY(Transient)
+		bool bIsButtonHoverable = false;
 
 	UFUNCTION()
 		virtual void OnUserButtonClicked(const int32 UserIndex);
@@ -130,5 +134,7 @@ protected:
 
 	virtual void NativeConstruct()override;
 	virtual void NativeDestruct()override;
+	virtual void NativeOnAddedToFocusPath(const FFocusEvent& InFocusEvent) override;
+	virtual void NativeOnRemovedFromFocusPath(const FFocusEvent& InFocusEvent) override;
 	virtual FReply NativeOnFocusReceived(const FGeometry& InGeometry, const FFocusEvent& InFocusEvent) override;
 };

@@ -84,7 +84,6 @@ void UNebulaFlowWelcomeScreenPage::NativeTick(const FGeometry& MyGeometry, float
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	if (!this->HasAnyUserFocus())
 	{
-		FCoreUObjectDelegates::OnWidgetFocusReceived.Broadcast(this, 0);
 		FSlateApplication::Get().SetAllUserFocus(this->TakeWidget());
 	}
 }

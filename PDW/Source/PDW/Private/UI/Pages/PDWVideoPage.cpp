@@ -35,7 +35,6 @@ void UPDWVideoPage::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	if (!this->HasAnyUserFocus())
 	{
-		FCoreUObjectDelegates::OnWidgetFocusReceived.Broadcast(this, 0);
 		FSlateApplication::Get().SetAllUserFocus(this->TakeWidget());
 	}
 }

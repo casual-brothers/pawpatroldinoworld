@@ -304,8 +304,6 @@ void UNebulaFlowUIManager::InitManager(UNebulaFlowGameInstance* InstanceOwner)
 	{
 		UITimerManager = new FTimerManager(InstanceOwner);
 	}
-	FCoreUObjectDelegates::OnWidgetFocusReceived.AddUObject(this, &UNebulaFlowUIManager::OnWidgetFocus);
-	FCoreUObjectDelegates::OnViewportFocusReceived.AddUObject(this, &UNebulaFlowUIManager::OnViewportFocus);
 }
 
 bool UNebulaFlowUIManager::IsUIInputLocked()

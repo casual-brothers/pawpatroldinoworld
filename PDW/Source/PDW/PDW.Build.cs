@@ -7,8 +7,18 @@ public class PDW : ModuleRules
     public PDW(ReadOnlyTargetRules Target) : base(Target)
     {
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+        string PlatformName = Target.Platform.ToString();
 
         //OptimizeCode = CodeOptimization.InShippingBuildsOnly;
+
+        PublicDefinitions.Add("PLATFORM_WINDOWS=" + (PlatformName == "Win64" ? "1" : "0"));
+        PublicDefinitions.Add("PLATFORM_WINGDK=" + (PlatformName == "WinGDK" ? "1" : "0"));
+        PublicDefinitions.Add("PLATFORM_XBOXONE=" + ((PlatformName == "XboxOne" || PlatformName == "XboxOneGDK") ? "1" : "0"));
+        PublicDefinitions.Add("PLATFORM_XSX=" + (PlatformName == "XSX" ? "1" : "0"));
+        PublicDefinitions.Add("PLATFORM_PS4=" + (PlatformName == "PS4" ? "1" : "0"));
+        PublicDefinitions.Add("PLATFORM_PS5=" + (PlatformName == "PS5" ? "1" : "0"));
+        PublicDefinitions.Add("PLATFORM_SWITCH=" + (PlatformName == "Switch" ? "1" : "0"));
+        PublicDefinitions.Add("PLATFORM_SWITCH2=" + (PlatformName == "Switch2" ? "1" : "0"));
 
         PublicDependencyModuleNames.AddRange(new string[] {
             "Core",
@@ -56,6 +66,14 @@ public class PDW : ModuleRules
             PublicDependencyModuleNames.AddRange(new string[]
 			{
 				"ImGui"
+			});
+		}
+
+		if (Target.Platform == UnrealTargetPlatform.Switch2)
+		{
+			PublicDependencyModuleNames.AddRange(new string[]
+			{
+				"StreamPlay"
 			});
 		}
 

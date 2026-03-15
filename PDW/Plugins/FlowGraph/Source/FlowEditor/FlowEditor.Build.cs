@@ -1,6 +1,7 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
 
 using UnrealBuildTool;
+using System.IO;
 
 public class FlowEditor : ModuleRules
 {
@@ -12,6 +13,11 @@ public class FlowEditor : ModuleRules
 		}
 
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+
+		PrivateIncludePaths.AddRange(new[]
+		{
+			Path.Combine(EngineDirectory, "Source", "Editor", "Kismet", "Internal")
+		});
 
 		PublicDependencyModuleNames.AddRange(new[]
 		{

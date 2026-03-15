@@ -3,6 +3,7 @@
 #include "Components/Button.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/SlateWrapperTypes.h"
+#include "GameFramework/PlayerController.h"
 #include "Input/NavigationReply.h"
 
 
@@ -105,7 +106,7 @@ void UNebulaFlowBaseButton::OnButtonUnFocused()
 
 void UNebulaFlowBaseButton::OnButtonHovered()
 {
-	if (Button->IsHoverable)
+	if (bIsButtonHoverable)
 	{
 		ButtonHovered.Broadcast(this);
 	}
@@ -113,7 +114,7 @@ void UNebulaFlowBaseButton::OnButtonHovered()
 
 void UNebulaFlowBaseButton::OnButtonUnHovered()
 {
-	if (Button->IsHoverable)
+	if (bIsButtonHoverable)
 	{
 		ButtonUnHovered.Broadcast(this);
 	}
@@ -124,13 +125,11 @@ void UNebulaFlowBaseButton::NativeConstruct()
 	Super::NativeConstruct();
 
 	UpdatePlatformButtonVisibility();
+	bIsButtonHoverable = IsButtonStartHoverable;
 
 	if (Button)
 	{
 		Button->OnClicked.AddUniqueDynamic(this, &UNebulaFlowBaseButton::OnButtonClicked);
-		Button->OnUserClicked.AddUniqueDynamic(this, &UNebulaFlowBaseButton::OnUserButtonClicked);
-		Button->OnFocused.AddUniqueDynamic(this, &UNebulaFlowBaseButton::OnButtonFocused);
-		Button->OnUnfocused.AddUniqueDynamic(this, &UNebulaFlowBaseButton::OnButtonUnFocused);
 		Button->OnHovered.AddUniqueDynamic(this, &UNebulaFlowBaseButton::OnButtonHovered);
 		Button->OnUnhovered.AddUniqueDynamic(this, &UNebulaFlowBaseButton::OnButtonUnHovered);
 	}
@@ -141,14 +140,23 @@ void UNebulaFlowBaseButton::NativeDestruct()
 	if (Button)
 	{
 		Button->OnClicked.RemoveDynamic(this, &UNebulaFlowBaseButton::OnButtonClicked);
-		Button->OnUserClicked.RemoveDynamic(this, &UNebulaFlowBaseButton::OnUserButtonClicked);
-		Button->OnFocused.RemoveDynamic(this, &UNebulaFlowBaseButton::OnButtonFocused);
-		Button->OnUnfocused.RemoveDynamic(this, &UNebulaFlowBaseButton::OnButtonUnFocused);
 		Button->OnHovered.RemoveDynamic(this, &UNebulaFlowBaseButton::OnButtonHovered);
 		Button->OnUnhovered.RemoveDynamic(this, &UNebulaFlowBaseButton::OnButtonUnHovered);
 	}
 
 	Super::NativeDestruct();
+}
+
+void UNebulaFlowBaseButton::NativeOnAddedToFocusPath(const FFocusEvent& InFocusEvent)
+{
+	Super::NativeOnAddedToFocusPath(InFocusEvent);
+	OnButtonFocused();
+}
+
+void UNebulaFlowBaseButton::NativeOnRemovedFromFocusPath(const FFocusEvent& InFocusEvent)
+{
+	Super::NativeOnRemovedFromFocusPath(InFocusEvent);
+	OnButtonUnFocused();
 }
 
 FReply UNebulaFlowBaseButton::NativeOnFocusReceived(const FGeometry& InGeometry, const FFocusEvent& InFocusEvent)

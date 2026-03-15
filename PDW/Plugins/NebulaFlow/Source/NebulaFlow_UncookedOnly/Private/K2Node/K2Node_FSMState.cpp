@@ -33,7 +33,7 @@ void UK2Node_FSMState::PostEditChangeProperty(struct FPropertyChangedEvent& Prop
 		if (AddedElementIndex >= 0 && AddedElementIndex < PinNames.Num())
 		{
 			FString PinString = PinNames[AddedElementIndex].ToString();
-			PinString.RemoveCharInline(*(" "));
+			PinString.ReplaceInline(TEXT(" "), TEXT(""));
 			PinNames[AddedElementIndex] = FName(*PinString);
 
 			const int32 FoundedIndex = PinNames.Find(PinNames[AddedElementIndex]);
@@ -63,7 +63,7 @@ void UK2Node_FSMState::PostEditChangeProperty(struct FPropertyChangedEvent& Prop
 		if (AddedElementIndex >= 0 && AddedElementIndex < PinTagsContainer.Num())
 		{
 			FString PinString = PinTagsContainer[AddedElementIndex].ToString();
-			PinString.RemoveCharInline(*(" "));
+			PinString.ReplaceInline(TEXT(" "), TEXT(""));
 			PinTagsContainer[AddedElementIndex] = FGameplayTag::RequestGameplayTag(FName(PinString), false);
 
 			const int32 FoundedIndex = PinTagsContainer.Find(PinTagsContainer[AddedElementIndex]);

@@ -95,6 +95,9 @@ protected:
 	FName Join2Player = "Join2Player";
 
 	UPROPERTY(Config, EditDefaultsOnly, BlueprintReadOnly, Category = "UI|UI Actions Definitions")
+	FName GuestStreamPlay = "GuestStreamPlay";
+
+	UPROPERTY(Config, EditDefaultsOnly, BlueprintReadOnly, Category = "UI|UI Actions Definitions")
 	FName SuccedAnimationCompleted = "SuccedAnimationCompleted";
 
 	UPROPERTY(Config, EditDefaultsOnly, BlueprintReadOnly, Category = "UI|UI Actions Definitions")
@@ -189,6 +192,9 @@ public:
 
 	UFUNCTION(BlueprintPure)
 	static const FName GetActionJoin2Player() { return Get()->Join2Player; };
+
+	UFUNCTION(BlueprintPure)
+	static const FName GetActionGuestStreamPlay() { return Get()->GuestStreamPlay; };
 
 	UFUNCTION(BlueprintPure)
 	static const FName GetActionSuccedAnimationCompleted() { return Get()->SuccedAnimationCompleted; };

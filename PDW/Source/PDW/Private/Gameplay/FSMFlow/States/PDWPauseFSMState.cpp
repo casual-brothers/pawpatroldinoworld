@@ -12,6 +12,12 @@
 #include "UI/Pages/PDWPauseMenuPage.h"
 #include "UI/Widgets/NebulaFlowBaseNavbar.h"
 #include "Managers/QuestSubsystem.h"
+#include "Managers/PDWStreamPlaySubsystem.h"
+#include "FunctionLibraries/NebulaFlowUIFunctionLibrary.h"
+#include "UI/NebulaFlowUIConstants.h"
+#include "UI/NebulaFlowDialogDataStructures.h"
+#include "UI/NebulaFlowNavbarDataStructures.h"
+#include "Engine/DataTable.h"
 #if WITH_EDITOR
 #include "ToxicUtilitiesSetting.h"
 #endif
@@ -22,6 +28,18 @@ void UPDWPauseFSMState::OnFSMStateEnter_Implementation(const FString& InOption /
 	StateOwner = InOption == "1" ? UPDWGameplayFunctionLibrary::GetPlayerControllerTwo(this) : UPDWGameplayFunctionLibrary::GetPlayerControllerOne(this);
 	Super::OnFSMStateEnter_Implementation(InOption);
 	UNebulaFlowCoreFunctionLibrary::SetGamePaused(this, true);
+
+#if defined(PLATFORM_SWITCH2) && PLATFORM_SWITCH2
+	if (UPDWStreamPlaySubsystem* StreamPlaySubsystem = UPDWStreamPlaySubsystem::Get(this))
+	{
+		StreamPlaySubsystem->OnSessionChanged.RemoveAll(this);
+		StreamPlaySubsystem->OnSessionChanged.AddUObject(this, &ThisClass::OnGuestSessionChanged);
+	}
+#endif
+
+#if defined(PLATFORM_SWITCH2) && PLATFORM_SWITCH2
+	RegisterGuestStreamPlayNavbarButton();
+#endif
 	
 	//TODO_UI UInputDeviceLibrary::GetAllConnectedInputDevices() Hide or show button join 2 player
 	
@@ -85,6 +103,10 @@ void UPDWPauseFSMState::OnFSMStateAction_Implementation(const FString& Action, c
 	{
 		ToggleJoinMultiplayer();
 	}
+	else if (Action == UPDWGameSettings::GetActionGuestStreamPlay().ToString())
+	{
+		ToggleGuestStreamPlay();
+	}
 	else if (Action == UPDWGameSettings::GetUIActionSettings())
 	{
 		TriggerTransition(UFlowDeveloperSettings::GetSettingsTag().GetTagName());
@@ -145,6 +167,118 @@ void UPDWPauseFSMState::ToggleJoinMultiplayer()
 	}
 }
 
+void UPDWPauseFSMState::OnFSMStateExit_Implementation()
+{
+#if defined(PLATFORM_SWITCH2) && PLATFORM_SWITCH2
+	if (UPDWStreamPlaySubsystem* StreamPlaySubsystem = UPDWStreamPlaySubsystem::Get(this))
+	{
+		StreamPlaySubsystem->OnSessionChanged.RemoveAll(this);
+	}
+
+	if (GuestWaitingDialog)
+	{
+		UNebulaFlowUIFunctionLibrary::HideDialog(this, GuestWaitingDialog);
+		GuestWaitingDialog = nullptr;
+	}
+
+	GetWorld()->GetTimerManager().ClearTimer(GuestWaitingTimeoutHandle);
+#endif
+
+	Super::OnFSMStateExit_Implementation();
+}
+
+void UPDWPauseFSMState::ToggleGuestStreamPlay()
+{
+#if defined(PLATFORM_SWITCH2) && PLATFORM_SWITCH2
+	if (UPDWStreamPlaySubsystem* StreamPlaySubsystem = UPDWStreamPlaySubsystem::Get(this))
+	{
+		if (StreamPlaySubsystem->IsSessionActive())
+		{
+			StreamPlaySubsystem->StopGuestSession();
+			return;
+		}
+
+		if (!StreamPlaySubsystem->IsSessionPending() && StreamPlaySubsystem->StartGuestSession())
+		{
+			GuestWaitingDialog = UNebulaFlowUIFunctionLibrary::ShowDialog(this, GuestWaitingDialogID, [&](FString Response)
+			{
+				OnGuestWaitingDialogResponse(Response);
+			});
+
+			if (GuestWaitingTimeout > 0.0f)
+			{
+				GetWorld()->GetTimerManager().SetTimer(GuestWaitingTimeoutHandle, this, &ThisClass::OnGuestWaitingTimedOut, GuestWaitingTimeout, false);
+			}
+		}
+	}
+#endif
+}
+
+void UPDWPauseFSMState::OnGuestWaitingDialogResponse(FString Response)
+{
+#if defined(PLATFORM_SWITCH2) && PLATFORM_SWITCH2
+	if (Response == TEXT("CancelGuestStreamPlay"))
+	{
+		if (UPDWStreamPlaySubsystem* StreamPlaySubsystem = UPDWStreamPlaySubsystem::Get(this))
+		{
+			StreamPlaySubsystem->StopGuestSession();
+		}
+
+		if (GuestWaitingDialog)
+		{
+			UNebulaFlowUIFunctionLibrary::HideDialog(this, GuestWaitingDialog);
+			GuestWaitingDialog = nullptr;
+		}
+
+		GetWorld()->GetTimerManager().ClearTimer(GuestWaitingTimeoutHandle);
+		RefreshGuestNavbarButton();
+	}
+#endif
+}
+
+void UPDWPauseFSMState::OnGuestSessionChanged(bool bIsSessionActive)
+{
+#if defined(PLATFORM_SWITCH2) && PLATFORM_SWITCH2
+	if (bIsSessionActive)
+	{
+		if (GuestWaitingDialog)
+		{
+			UNebulaFlowUIFunctionLibrary::HideDialog(this, GuestWaitingDialog);
+			GuestWaitingDialog = nullptr;
+		}
+
+		GetWorld()->GetTimerManager().ClearTimer(GuestWaitingTimeoutHandle);
+		RefreshGuestNavbarButton();
+		BackToGameplay();
+	}
+	else
+	{
+		RefreshGuestNavbarButton();
+	}
+#endif
+}
+
+void UPDWPauseFSMState::OnGuestWaitingTimedOut()
+{
+#if defined(PLATFORM_SWITCH2) && PLATFORM_SWITCH2
+	if (UPDWStreamPlaySubsystem* StreamPlaySubsystem = UPDWStreamPlaySubsystem::Get(this))
+	{
+		if (StreamPlaySubsystem->IsSessionPending())
+		{
+			StreamPlaySubsystem->StopGuestSession();
+		}
+	}
+
+	if (GuestWaitingDialog)
+	{
+		UNebulaFlowUIFunctionLibrary::HideDialog(this, GuestWaitingDialog);
+		GuestWaitingDialog = nullptr;
+	}
+
+	RefreshGuestNavbarButton();
+#endif
+}
+
 void UPDWPauseFSMState::OnModalResponse(FString Response)
 {
 	if (Response == UPDWGameSettings::GetActionJoinPlayer2Succes())
@@ -170,6 +304,13 @@ void UPDWPauseFSMState::OnGoToMainMenuDialogResponse(FString InResponse)
 			GM->RemovePlayer2();
 		}
 
+#if defined(PLATFORM_SWITCH2) && PLATFORM_SWITCH2
+		if (UPDWStreamPlaySubsystem* StreamPlaySubsystem = UPDWStreamPlaySubsystem::Get(this))
+		{
+			StreamPlaySubsystem->StopGuestSession();
+		}
+#endif
+
 		UNebulaFlowAudioFunctionLibrary::ForceStopSpeaker(GetWorld());
 
 		TriggerTransition(UFlowDeveloperSettings::GetMainMenuTag().GetTagName());
@@ -189,4 +330,74 @@ void UPDWPauseFSMState::BackToGameplay()
 void UPDWPauseFSMState::DefineStateOwner()
 {
 	
+}
+
+void UPDWPauseFSMState::RegisterGuestStreamPlayNavbarButton()
+{
+#if defined(PLATFORM_SWITCH2) && PLATFORM_SWITCH2
+	if (PageRef == nullptr || PageRef->GetPageNavbar() == nullptr)
+	{
+		return;
+	}
+
+	UNebulaFlowUIConstants* UIConstants = UNebulaFlowUIFunctionLibrary::GetUIConstants(this);
+	if (UIConstants == nullptr)
+	{
+		return;
+	}
+
+	UDataTable* NavbarButtonsTable = const_cast<UDataTable*>(UIConstants->GetNavbarButtonsTable());
+	if (NavbarButtonsTable == nullptr)
+	{
+		return;
+	}
+
+	const FName GuestActionName = UPDWGameSettings::GetActionGuestStreamPlay();
+	const bool bIsGuestActive = UPDWStreamPlaySubsystem::Get(this) && UPDWStreamPlaySubsystem::Get(this)->IsSessionActive();
+	if (NavbarButtonsTable->FindRow<FNavbarButtonDataTableRow>(GuestActionName, TEXT("RegisterGuestStreamPlayNavbarButton"), false) == nullptr)
+	{
+		FNavbarButtonDataTableRow GuestRow;
+		GuestRow.NavbarButtonClass = UPDWGameSettings::GetNavButtonClassReference();
+		GuestRow.NavbarButtonData.ButtonAction = GuestActionName;
+		GuestRow.NavbarButtonData.ButtonText = FText::FromString(bIsGuestActive ? TEXT("Stop Guest") : TEXT("Guest"));
+		GuestRow.NavbarButtonData.bListenAction = false;
+		NavbarButtonsTable->AddRow(GuestActionName, GuestRow);
+	}
+	else if (FNavbarButtonDataTableRow* ExistingGuestRow = NavbarButtonsTable->FindRow<FNavbarButtonDataTableRow>(GuestActionName, TEXT("RegisterGuestStreamPlayNavbarButton"), false))
+	{
+		ExistingGuestRow->NavbarButtonData.ButtonText = FText::FromString(bIsGuestActive ? TEXT("Stop Guest") : TEXT("Guest"));
+	}
+
+	PageRef->GetPageNavbar()->RemoveNavbarButton(GuestActionName);
+	PageRef->GetPageNavbar()->AddNavbarButton(GuestActionName, ENavElementPosition::RIGHT);
+
+	UDataTable* DialogConfigTable = const_cast<UDataTable*>(UIConstants->GetDialogConfigurationsTable());
+	if (DialogConfigTable == nullptr)
+	{
+		return;
+	}
+
+	if (DialogConfigTable->FindRow<FDialogConfigTableRow>(GuestWaitingDialogID, TEXT("RegisterGuestStreamPlayNavbarButton"), false) == nullptr)
+	{
+		const FDialogConfigTableRow* TemplateRow = DialogConfigTable->FindRow<FDialogConfigTableRow>(AskConfirmationDialogID, TEXT("RegisterGuestStreamPlayNavbarButton"), false);
+		if (TemplateRow != nullptr)
+		{
+			FDialogConfigTableRow WaitingRow = *TemplateRow;
+			WaitingRow.DialogConfiguration.DialogText = FText::FromString(TEXT("Waiting for a guest to connect..."));
+			WaitingRow.DialogConfiguration.bHasSecondaryText = true;
+			WaitingRow.DialogConfiguration.SecondaryDialogText = FText::FromString(TEXT("You can cancel and keep playing if no one joins."));
+			WaitingRow.DialogConfiguration.ButtonConfigurations.SetNum(1);
+			WaitingRow.DialogConfiguration.ButtonConfigurations[0].NavButtonData.ButtonText = FText::FromString(TEXT("Cancel"));
+			WaitingRow.DialogConfiguration.ButtonConfigurations[0].ButtonResponse = TEXT("CancelGuestStreamPlay");
+			DialogConfigTable->AddRow(GuestWaitingDialogID, WaitingRow);
+		}
+	}
+#endif
+}
+
+void UPDWPauseFSMState::RefreshGuestNavbarButton()
+{
+#if defined(PLATFORM_SWITCH2) && PLATFORM_SWITCH2
+	RegisterGuestStreamPlayNavbarButton();
+#endif
 }

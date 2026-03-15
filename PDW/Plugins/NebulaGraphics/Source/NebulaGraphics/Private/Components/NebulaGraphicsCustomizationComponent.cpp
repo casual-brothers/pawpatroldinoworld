@@ -718,7 +718,7 @@ void UNebulaGraphicsCustomizationComponent::CustomizeMaterial(const FGameplayTag
 
 														if (!MeshComponent->bForceMipStreaming)
 														{
-															MaterialToCustomize.MaterialInstance->SetForceMipLevelsToBeResident(false, true, 5.0f, 0, false, true);
+															MaterialToCustomize.MaterialInstance->SetForceMipLevelsToBeResident(false, true, 5.0f, 0, false);
 														}
 
 														WeakThis.Get()->OnCustomizationCompleted.Broadcast(ENebulaGraphicsCustomizationType::MaterialInstance, MaterialToCustomize.ComponentToCustomizeTag);
@@ -1038,7 +1038,7 @@ void UNebulaGraphicsCustomizationComponent::CustomizeDecalMaterial(const FGamepl
 													{
 														DecalComponent->SetDecalMaterial(DecalMaterialToCustomize.MaterialInstance.Get());
 
-														DecalMaterialToCustomize.MaterialInstance->SetForceMipLevelsToBeResident(false, true, 5.0f, 0, false, true);
+														DecalMaterialToCustomize.MaterialInstance->SetForceMipLevelsToBeResident(false, true, 5.0f, 0, false);
 
 														WeakThis.Get()->OnCustomizationCompleted.Broadcast(ENebulaGraphicsCustomizationType::DecalMaterialInstance, DecalMaterialToCustomize.ComponentToCustomizeTag);
 													}

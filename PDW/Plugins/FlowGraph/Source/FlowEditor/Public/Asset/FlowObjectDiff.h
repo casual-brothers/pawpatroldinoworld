@@ -2,7 +2,8 @@
 
 #pragma once
 
-#include "Editor/Kismet/Private/DiffControl.h"
+#include "DetailsDiff.h"
+#include "DiffUtils.h"
 
 class FBlueprintDifferenceTreeEntry;
 class FDetailsDiff;

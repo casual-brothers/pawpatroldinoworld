@@ -185,7 +185,9 @@ void UNebulaFlowNavButtonBase::InitializeButton(FNavbarButtonData NewButtonData)
 			if (ClickableButton)
 			{
 				if (!ClickableButton->OnClicked.Contains(this, FName("OnClick")))
+				{
 					ClickableButton->OnClicked.AddDynamic(this, &UNebulaFlowNavButtonBase::OnClick);
+				}
 			}
 		}
 	}
@@ -193,7 +195,7 @@ void UNebulaFlowNavButtonBase::InitializeButton(FNavbarButtonData NewButtonData)
 
 void UNebulaFlowNavButtonBase::UninitializeButton()
 {
-	if (ClickableButton && NavbarButtonData.bListenAction)
+	if (ClickableButton)
 	{
 		ClickableButton->OnClicked.RemoveDynamic(this, &UNebulaFlowNavButtonBase::OnClick);
 	}
