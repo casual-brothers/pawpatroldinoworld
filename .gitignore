@@ -55,6 +55,7 @@
 /PDW/Binaries/
 /PDW/Build/
 /PDW/*.sln
+!/PDW/Platforms/Switch2/Build/Resources/**
 
 # C/C++ source files
 !*.c
@@ -372,3 +373,4 @@ Engine/Extras/ThirdPartyNotUE/SDKs/HostLinux/**
 /PDW/Binaries/
 /PDW/Build/
 /PDW/*.sln
+!/PDW/Platforms/Switch2/Build/Resources/**
